@@ -5,13 +5,14 @@ import { Card, Chip, PageHeader, Spinner, Stat } from "../components/ui";
 import { useAsync } from "../lib/useAsync";
 import { money, num } from "../lib/format";
 
-export default function Dashboard() {
-  const orders = useAsync(() => api.get<SalesOrder[]>("/sales-orders"));
-  const cuts = useAsync(() => api.get<CutOrder[]>("/production/cut-orders"));
-  const rolls = useAsync(() => api.get<Roll[]>("/inventory/rolls"));
-  const pnl = useAsync(() => api.get<PnL>("/finance/profit-and-loss"));
-  const ar = useAsync(() => api.get<ARInvoice[]>("/finance/ar-invoices"));
-  const ap = useAsync(() => api.get<APBill[]>("/finance/ap-bills"));
+export default function Dashboard({ permissions }: { permissions: string[] }) {
+  const has = (permission: string) => permissions.includes(permission);
+  const orders = useAsync(() => has("sales:read") ? api.get<SalesOrder[]>("/sales-orders") : Promise.resolve([]));
+  const cuts = useAsync(() => has("production:read") ? api.get<CutOrder[]>("/production/cut-orders") : Promise.resolve([]));
+  const rolls = useAsync(() => has("inventory:read") ? api.get<Roll[]>("/inventory/rolls") : Promise.resolve([]));
+  const pnl = useAsync(() => has("finance:read") ? api.get<PnL>("/finance/profit-and-loss") : Promise.resolve(null as unknown as PnL));
+  const ar = useAsync(() => has("finance:read") ? api.get<ARInvoice[]>("/finance/ar-invoices") : Promise.resolve([]));
+  const ap = useAsync(() => has("finance:read") ? api.get<APBill[]>("/finance/ap-bills") : Promise.resolve([]));
 
   const openOrders = (orders.data ?? []).filter(
     (o) => !["shipped", "closed", "cancelled"].includes(o.status)
@@ -40,12 +41,12 @@ export default function Dashboard() {
         />
         <Stat
           k="Net profit (posted)"
-          v={pnl.loading ? "…" : money(pnl.data?.net_profit)}
-          foot={`Revenue ${money(pnl.data?.total_income)}`}
+          v={!has("finance:read") ? "Restricted" : pnl.loading ? "…" : money(pnl.data?.net_profit)}
+          foot={has("finance:read") ? `Revenue ${money(pnl.data?.total_income)}` : "Finance role required"}
           accent="madder"
         />
-        <Stat k="AR outstanding" v={money(arOutstanding)} foot="Owed by customers" />
-        <Stat k="AP outstanding" v={money(apOutstanding)} foot="Owed to suppliers" />
+        <Stat k="AR outstanding" v={has("finance:read") ? money(arOutstanding) : "Restricted"} foot="Owed by customers" />
+        <Stat k="AP outstanding" v={has("finance:read") ? money(apOutstanding) : "Restricted"} foot="Owed to suppliers" />
       </div>
 
       <div className="grid cols-4" style={{ marginBottom: 22 }}>

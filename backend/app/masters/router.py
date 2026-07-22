@@ -6,6 +6,7 @@ from sqlmodel import Session, select
 
 from ..db import get_session
 from ..kernel.numbering import next_document_number
+from ..kernel.rbac import Role, require_roles
 from .models import (
     Colour,
     ColourCreate,
@@ -47,7 +48,7 @@ def _commit(session: Session) -> None:
 # Colours (1.4)
 # --------------------------------------------------------------------------- #
 @router.post("/colours", response_model=ColourRead, status_code=201)
-def create_colour(payload: ColourCreate, session: Session = Depends(get_session)):
+def create_colour(payload: ColourCreate, session: Session = Depends(get_session), _: str = Depends(require_roles(Role.merchandiser))):
     colour = Colour.model_validate(payload)
     session.add(colour)
     _commit(session)
@@ -64,7 +65,7 @@ def list_colours(session: Session = Depends(get_session)):
 # Seasons (1.5)
 # --------------------------------------------------------------------------- #
 @router.post("/seasons", response_model=SeasonRead, status_code=201)
-def create_season(payload: SeasonCreate, session: Session = Depends(get_session)):
+def create_season(payload: SeasonCreate, session: Session = Depends(get_session), _: str = Depends(require_roles(Role.merchandiser))):
     season = Season.model_validate(payload)
     session.add(season)
     _commit(session)
@@ -94,7 +95,7 @@ def _size_range_read(size_range: SizeRange) -> SizeRangeRead:
 
 
 @router.post("/size-ranges", response_model=SizeRangeRead, status_code=201)
-def create_size_range(payload: SizeRangeCreate, session: Session = Depends(get_session)):
+def create_size_range(payload: SizeRangeCreate, session: Session = Depends(get_session), _: str = Depends(require_roles(Role.merchandiser))):
     size_range = SizeRange(code=payload.code, name=payload.name, active=payload.active)
     size_range.sizes = [
         SizeRangeItem(position=s.position, label=s.label) for s in payload.sizes
@@ -115,7 +116,7 @@ def list_size_ranges(session: Session = Depends(get_session)):
 # Customers (1.1)
 # --------------------------------------------------------------------------- #
 @router.post("/customers", response_model=CustomerRead, status_code=201)
-def create_customer(payload: CustomerCreate, session: Session = Depends(get_session)):
+def create_customer(payload: CustomerCreate, session: Session = Depends(get_session), _: str = Depends(require_roles(Role.merchandiser))):
     code = next_document_number(session, "CUSTOMER", "CUST")
     customer = Customer.model_validate(payload, update={"code": code})
     session.add(customer)
@@ -147,7 +148,7 @@ def _supplier_read(supplier: Supplier) -> SupplierRead:
 
 
 @router.post("/suppliers", response_model=SupplierRead, status_code=201)
-def create_supplier(payload: SupplierCreate, session: Session = Depends(get_session)):
+def create_supplier(payload: SupplierCreate, session: Session = Depends(get_session), _: str = Depends(require_roles(Role.procurement, Role.merchandiser))):
     code = next_document_number(session, "SUPPLIER", "SUP")
     supplier = Supplier(
         code=code,
@@ -190,7 +191,7 @@ _MATERIAL_CODE_PREFIX = {
 
 
 @router.post("/materials", response_model=MaterialRead, status_code=201)
-def create_material(payload: MaterialCreate, session: Session = Depends(get_session)):
+def create_material(payload: MaterialCreate, session: Session = Depends(get_session), _: str = Depends(require_roles(Role.procurement, Role.merchandiser))):
     if payload.purchase_to_base_factor <= 0:
         raise HTTPException(status_code=422, detail="purchase_to_base_factor must be positive")
     doc_type, prefix = _MATERIAL_CODE_PREFIX[payload.material_type]
@@ -226,6 +227,7 @@ def update_material(
     material_id: int,
     payload: MaterialUpdate,
     session: Session = Depends(get_session),
+    _: str = Depends(require_roles(Role.procurement, Role.merchandiser)),
 ):
     material = session.get(Material, material_id)
     if material is None:

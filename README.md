@@ -85,8 +85,10 @@ A React + TypeScript single-page app covering the full spine, with an
 madder dye accents). Pages: Dashboard, Sales Orders (size-matrix entry),
 Styles & BOM, Costing, Procurement + Goods Receipt, Inventory (rolls / ledger /
 reservations), Production (cut / sew / subcontract), Quality (four-point / DHU /
-AQL), Master Data, and Finance (journals / AR / AP / P&L). RBAC is exercised via
-the **Acting role** switcher in the top bar (sends the `X-Role` header).
+AQL), Master Data, and Finance (journals / AR / AP / P&L). Users sign in with
+centrally managed accounts. The SPA uses an HttpOnly, SameSite session cookie;
+roles cannot be selected or asserted by the browser. Administrators manage
+accounts and role assignments from **Access Control**.
 
 ## Database migrations (production)
 
@@ -99,8 +101,24 @@ alembic upgrade head          # apply migrations
 alembic revision --autogenerate -m "describe change"   # author a new migration
 ```
 
-## Access control (dev)
+## Access control
 
-RBAC is enforced via an `X-Role` header (e.g. `X-Role: merchandiser`). `admin`
-bypasses all gates. Real authentication (users, sessions) replaces the header in
-a later iteration; the permission surface is already attached to every endpoint.
+Every business endpoint requires an authenticated, active user. Passwords are
+Argon2id-hashed and browser sessions are random, expiring credentials whose
+hashes are stored server-side for immediate revocation. Database role assignments
+drive module read permissions and action-level segregation of duties; `X-Role`
+headers are ignored. Login attempts and account changes are security-audited.
+Browser mutations additionally require a double-submit CSRF token, temporary
+passwords must be replaced before ERP access, sessions expire after inactivity,
+and login attempts are throttled by both account and client IP. Responses carry
+defensive browser headers and reject oversized request bodies.
+
+For the first production startup, set `BOOTSTRAP_ADMIN_EMAIL` and a random
+`BOOTSTRAP_ADMIN_PASSWORD` of at least 12 characters. Remove both settings once
+the administrator exists. Also set `SESSION_COOKIE_SECURE=true`, `ALLOWED_HOSTS`,
+and the HTTPS `CORS_ORIGINS` value; see `backend/.env.example`.
+Set `AUTO_CREATE_SCHEMA=false` in production and apply `alembic upgrade head`
+before starting the application.
+Set `ENVIRONMENT=production` as well: startup will then reject SQLite, insecure
+cookies, development hosts/origins, automatic schema creation, and public API
+documentation instead of silently launching with an unsafe configuration.

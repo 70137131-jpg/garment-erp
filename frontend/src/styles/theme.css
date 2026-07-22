@@ -837,3 +837,11 @@ textarea.input:focus {
   display: inline-block;
   vertical-align: middle;
 }
+/* Authenticated shell and access-control surfaces */
+.login-page,.app-loading{min-height:100vh;display:grid;place-items:center;background:var(--paper)}
+.login-card{width:min(420px,calc(100vw - 32px));background:var(--paper);border:1px solid var(--line);padding:38px;box-shadow:0 18px 60px rgba(25,22,18,.12);display:grid;gap:14px}
+.login-card h1{margin:0}.login-card .muted{color:var(--ink-faint)}.login-card .btn{margin-top:8px}.login-mark{width:42px;height:42px;background:var(--indigo);display:grid;place-items:center}.login-mark .glyph{width:17px;height:17px;border:2px solid white;transform:rotate(45deg)}
+.auth-error{padding:10px 12px;background:#f8e7e4;color:#8c2f25;border-left:3px solid #a64034}
+.user-chip{display:flex;align-items:center;gap:14px}.user-chip small{display:block;color:var(--ink-faint);max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.user-chip .btn{padding:6px 10px}
+.role-grid{border:1px solid var(--line);padding:12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.role-grid legend{padding:0 6px;color:var(--ink-faint)}
+.compact-roles{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:4px;font-size:11px;min-width:300px}

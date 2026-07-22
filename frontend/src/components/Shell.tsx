@@ -1,6 +1,6 @@
-import { ReactNode, useState } from "react";
+import { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { getRole, setRole } from "../api/client";
+import { AuthUser } from "../api/client";
 
 const NAV = [
   {
@@ -33,18 +33,17 @@ const NAV = [
   },
 ];
 
-const ROLES = [
-  "admin",
-  "merchandiser",
-  "procurement",
-  "stores",
-  "cutting_supervisor",
-  "sewing_supervisor",
-  "quality_inspector",
-  "planner",
-  "finance",
-  "readonly",
-];
+const PAGE_PERMISSION: Record<string, string> = {
+  "/sales": "sales:read",
+  "/styles": "styles:read",
+  "/costing": "costing:read",
+  "/procurement": "procurement:read",
+  "/inventory": "inventory:read",
+  "/production": "production:read",
+  "/quality": "quality:read",
+  "/masters": "masters:read",
+  "/finance": "finance:read",
+};
 
 function crumbFor(path: string): string {
   if (path === "/") return "Dashboard";
@@ -59,13 +58,13 @@ function crumbFor(path: string): string {
     quality: "Quality",
     masters: "Master Data",
     finance: "Finance",
+    users: "Access Control",
   };
   return map[seg] ?? seg;
 }
 
-export function Shell({ children }: { children: ReactNode }) {
+export function Shell({ children, user, onLogout }: { children: ReactNode; user: AuthUser; onLogout: () => void }) {
   const loc = useLocation();
-  const [role, setRoleState] = useState(getRole());
 
   return (
     <div className="shell">
@@ -83,7 +82,9 @@ export function Shell({ children }: { children: ReactNode }) {
           {NAV.map((group) => (
             <div className="nav-group" key={group.label}>
               <div className="nav-label">{group.label}</div>
-              {group.items.map((item) => (
+              {group.items
+                .filter((item) => !PAGE_PERMISSION[item.to] || user.permissions.includes(PAGE_PERMISSION[item.to]))
+                .map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}
@@ -96,6 +97,14 @@ export function Shell({ children }: { children: ReactNode }) {
               ))}
             </div>
           ))}
+          {user.permissions.includes("users:manage") && (
+            <div className="nav-group">
+              <div className="nav-label">Administration</div>
+              <NavLink to="/users" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
+                <span className="ic">AC</span>Access Control
+              </NavLink>
+            </div>
+          )}
         </nav>
       </aside>
 
@@ -105,23 +114,9 @@ export function Shell({ children }: { children: ReactNode }) {
             Atelier / <b>{crumbFor(loc.pathname)}</b>
           </div>
           <div className="topbar-right">
-            <div className="role-switch">
-              <label>Acting role</label>
-              <select
-                className="select"
-                style={{ width: "auto", padding: "5px 10px" }}
-                value={role}
-                onChange={(e) => {
-                  setRole(e.target.value);
-                  setRoleState(e.target.value);
-                }}
-              >
-                {ROLES.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
+            <div className="user-chip">
+              <div><b>{user.display_name}</b><small>{user.roles.join(" · ")}</small></div>
+              <button className="btn ghost" onClick={onLogout}>Sign out</button>
             </div>
           </div>
         </header>

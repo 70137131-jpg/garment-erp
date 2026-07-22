@@ -3,6 +3,17 @@
 from decimal import Decimal
 
 from tests.factories import make_fabric, make_size_range, make_supplier
+from app.kernel.rbac import Principal, Role, get_current_principal
+
+
+def _act_as(client, *roles: Role):
+    client.app.dependency_overrides[get_current_principal] = lambda: Principal(
+        user_id=10,
+        email="operator@test.local",
+        display_name="Test Operator",
+        roles=frozenset(roles),
+        session_id=10,
+    )
 
 
 def _style_payload(sr):
@@ -11,6 +22,7 @@ def _style_payload(sr):
 
 def test_role_gate_rejects_wrong_role(client):
     sr = make_size_range(client)
+    _act_as(client, Role.stores)
     # Stores cannot create styles (merchandiser duty).
     r = client.post("/styles", json=_style_payload(sr), headers={"X-Role": "stores"})
     assert r.status_code == 403
@@ -18,6 +30,7 @@ def test_role_gate_rejects_wrong_role(client):
 
 def test_role_gate_allows_correct_role(client):
     sr = make_size_range(client)
+    _act_as(client, Role.merchandiser)
     r = client.post("/styles", json=_style_payload(sr), headers={"X-Role": "merchandiser"})
     assert r.status_code == 201
 
@@ -34,11 +47,20 @@ def test_segregation_finance_only_posts_journals(finance_client):
         {"account_code": "1200", "debit": "100"},
         {"account_code": "3000", "credit": "100"}]}
     # Procurement cannot touch the ledger.
-    r = finance_client.post("/finance/journal-entries", json=payload, headers={"X-Role": "procurement"})
+    _act_as(finance_client, Role.procurement)
+    r = finance_client.post("/finance/journal-entries", json=payload, headers={"X-Role": "finance"})
     assert r.status_code == 403
     # Finance can.
+    _act_as(finance_client, Role.finance)
     r = finance_client.post("/finance/journal-entries", json=payload, headers={"X-Role": "finance"})
     assert r.status_code == 201
+
+
+def test_spoofed_role_header_cannot_escalate(client):
+    sr = make_size_range(client)
+    _act_as(client, Role.stores)
+    r = client.post("/styles", json=_style_payload(sr), headers={"X-Role": "admin"})
+    assert r.status_code == 403
 
 
 def test_stock_ledger_is_append_only_audit(client):

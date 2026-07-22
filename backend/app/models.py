@@ -15,4 +15,5 @@ from .procurement import models as procurement_models  # noqa: F401
 from .production import models as production_models  # noqa: F401
 from .quality import models as quality_models  # noqa: F401
 from .sales import models as sales_models  # noqa: F401
+from .security import models as security_models  # noqa: F401
 from .styles import models as styles_models  # noqa: F401
