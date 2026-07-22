@@ -1,0 +1,175 @@
+"""Module 7 — Quality. Incoming four-point fabric inspection (7.1/7.2).
+
+Inline DHU (7.3) and final AQL (7.4) are added in Phase 7 alongside this.
+
+Four-point system: each defect scores 1–4 penalty points by size; the roll's
+score is normalised to points per 100 square yards:
+
+    points_per_100_sqyd = (total_points × 3600) / (length_yards × width_inches)
+
+A roll scoring at or below the acceptance threshold (default 40) passes and
+becomes ``available``; otherwise it is ``quarantined`` (7.5 — quality status on
+inventory).
+"""
+
+from datetime import date
+from decimal import Decimal
+from enum import Enum
+from typing import List, Optional
+
+from sqlmodel import Field, Relationship, SQLModel
+
+from ..kernel.audit import TimestampMixin
+from ..kernel.types import quantity_field
+
+
+class InspectionResult(str, Enum):
+    pending = "pending"
+    passed = "passed"
+    failed = "failed"
+
+
+class FourPointInspection(TimestampMixin, table=True):
+    __tablename__ = "four_point_inspection"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    inspection_number: str = Field(index=True, unique=True)
+    roll_id: int = Field(foreign_key="roll.id", index=True)
+    inspected_length: Decimal = quantity_field(default=Decimal("0"))  # metres
+    width_cm: Decimal = quantity_field(default=Decimal("0"))
+    acceptance_threshold: Decimal = quantity_field(default=Decimal("40"))
+    total_points: int = 0
+    points_per_100sqyd: Decimal = quantity_field(default=Decimal("0"))
+    result: InspectionResult = Field(default=InspectionResult.pending)
+    inspected_date: Optional[date] = None
+    inspector: Optional[str] = None
+
+    defects: List["FourPointDefect"] = Relationship(
+        back_populates="inspection",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+
+
+class FourPointDefect(SQLModel, table=True):
+    __tablename__ = "four_point_defect"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    inspection_id: int = Field(foreign_key="four_point_inspection.id", index=True)
+    description: Optional[str] = None
+    penalty_points: int = 0  # 1..4
+    position_m: Optional[Decimal] = quantity_field(default=None, nullable=True)
+
+    inspection: Optional[FourPointInspection] = Relationship(back_populates="defects")
+
+
+# --------------------------------------------------------------------------- #
+# API payloads
+# --------------------------------------------------------------------------- #
+class DefectInput(SQLModel):
+    description: Optional[str] = None
+    penalty_points: int
+    position_m: Optional[Decimal] = None
+
+
+class FourPointInspectionCreate(SQLModel):
+    roll_id: int
+    inspected_length: Optional[Decimal] = None  # defaults to roll length
+    width_cm: Optional[Decimal] = None  # defaults to roll width
+    acceptance_threshold: Decimal = Decimal("40")
+    inspected_date: Optional[date] = None
+    defects: List[DefectInput] = []
+
+
+class DefectRead(SQLModel):
+    description: Optional[str]
+    penalty_points: int
+    position_m: Optional[Decimal]
+
+
+class FourPointInspectionRead(SQLModel):
+    id: int
+    inspection_number: str
+    roll_id: int
+    inspected_length: Decimal
+    width_cm: Decimal
+    acceptance_threshold: Decimal
+    total_points: int
+    points_per_100sqyd: Decimal
+    result: InspectionResult
+    roll_status: str
+    defects: List[DefectRead]
+
+
+# --------------------------------------------------------------------------- #
+# 7.3 Inline inspection — DHU (defects per hundred units)
+# --------------------------------------------------------------------------- #
+class InlineInspection(TimestampMixin, table=True):
+    __tablename__ = "inline_inspection"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    inspection_number: str = Field(index=True, unique=True)
+    sewing_order_id: int = Field(foreign_key="sewing_order.id", index=True)
+    inspected_date: Optional[date] = None
+    units_checked: int = 0
+    defects_found: int = 0
+    dhu: Decimal = quantity_field(default=Decimal("0"))
+    inspector: Optional[str] = None
+
+
+class InlineInspectionCreate(SQLModel):
+    sewing_order_id: int
+    inspected_date: Optional[date] = None
+    units_checked: int
+    defects_found: int
+
+
+class InlineInspectionRead(SQLModel):
+    id: int
+    inspection_number: str
+    sewing_order_id: int
+    units_checked: int
+    defects_found: int
+    dhu: Decimal
+
+
+# --------------------------------------------------------------------------- #
+# 7.4 Final inspection — AQL (gates shipment)
+# --------------------------------------------------------------------------- #
+class FinalInspection(TimestampMixin, table=True):
+    __tablename__ = "final_inspection"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    inspection_number: str = Field(index=True, unique=True)
+    sales_order_id: int = Field(foreign_key="sales_order.id", index=True)
+    lot_size: int = 0
+    aql: Decimal = quantity_field(default=Decimal("2.5"))
+    code_letter: str = ""
+    sample_size: int = 0
+    accept_number: int = 0
+    reject_number: int = 0
+    defects_found: int = 0
+    result: InspectionResult = Field(default=InspectionResult.pending)
+    inspected_date: Optional[date] = None
+    inspector: Optional[str] = None
+
+
+class FinalInspectionCreate(SQLModel):
+    sales_order_id: int
+    lot_size: int
+    aql: Decimal = Decimal("2.5")
+    defects_found: int
+    inspected_date: Optional[date] = None
+
+
+class FinalInspectionRead(SQLModel):
+    id: int
+    inspection_number: str
+    sales_order_id: int
+    lot_size: int
+    aql: Decimal
+    code_letter: str
+    sample_size: int
+    accept_number: int
+    reject_number: int
+    defects_found: int
+    result: InspectionResult
