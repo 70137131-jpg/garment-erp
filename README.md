@@ -4,10 +4,11 @@ A single source of truth for a garment manufacturing business — see
 [`docs/blueprint.md`](docs/blueprint.md) for the full functional blueprint and
 [`docs/build-plan.md`](docs/build-plan.md) for the phased build plan.
 
-Stack: **FastAPI + SQLModel + Alembic** (SQLite for local dev, Postgres in
-production). Money and quantities are `Decimal` with defined precision; the stock
-ledger and accounting journals are append-only; specifications (BOMs, cost
-sheets) are versioned; document numbers are gap-free and sequential.
+Stack: **FastAPI + SQLModel + Alembic** backend, **React + Vite + TypeScript**
+frontend (SQLite for local dev, Postgres in production). Money and quantities are
+`Decimal` with defined precision; the stock ledger and accounting journals are
+append-only; specifications (BOMs, cost sheets) are versioned; document numbers
+are gap-free and sequential.
 
 ## Build status
 
@@ -46,6 +47,8 @@ quality → costing → finance → P&L) is executed as a single test:
 
 ## Running locally
 
+**Backend** (terminal 1):
+
 ```bash
 cd backend
 python3 -m venv .venv
@@ -54,7 +57,7 @@ pip install -r requirements.txt
 
 # create the schema (dev, SQLite) and run the API
 uvicorn app.main:app --reload
-# open http://127.0.0.1:8000/docs
+# API docs at http://127.0.0.1:8000/docs
 
 # run the test suite (66 tests, including the Part C acceptance scenario)
 pytest
@@ -62,6 +65,28 @@ pytest
 
 The API seeds a default chart of accounts and wires finance auto-posting on
 startup.
+
+**Frontend** (terminal 2):
+
+```bash
+cd frontend
+npm install
+npm run dev
+# open http://localhost:5173
+```
+
+The Vite dev server proxies `/api/*` to the backend on port 8000. Build for
+production with `npm run build` (emits static assets to `frontend/dist`).
+
+## Frontend
+
+A React + TypeScript single-page app covering the full spine, with an
+"industrial atelier" design system (IBM Plex type, warm-paper canvas, indigo +
+madder dye accents). Pages: Dashboard, Sales Orders (size-matrix entry),
+Styles & BOM, Costing, Procurement + Goods Receipt, Inventory (rolls / ledger /
+reservations), Production (cut / sew / subcontract), Quality (four-point / DHU /
+AQL), Master Data, and Finance (journals / AR / AP / P&L). RBAC is exercised via
+the **Acting role** switcher in the top bar (sends the `X-Role` header).
 
 ## Database migrations (production)
 
