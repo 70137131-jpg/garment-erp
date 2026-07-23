@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { SizeRange, Style } from "../api/types";
+import { useAuthorization } from "../auth/Authorization";
 import { Card, Chip, Drawer, ErrorBox, Field, PageHeader, Spinner } from "../components/ui";
 import { useToast } from "../components/Toast";
 import { useAsync } from "../lib/useAsync";
@@ -10,6 +11,7 @@ import { titled } from "../lib/format";
 const GENDERS = ["mens", "womens", "boys", "girls", "unisex"];
 
 export default function Styles() {
+  const { can } = useAuthorization();
   const { data, loading, reload } = useAsync(() => api.get<Style[]>("/styles"));
   const [open, setOpen] = useState(false);
   return (
@@ -18,7 +20,7 @@ export default function Styles() {
         eyebrow="Module 1.7 – 1.10"
         title="Styles & BOM"
         subtitle="Each style carries approved colourways and a versioned, per-size bill of materials — the recipe the whole factory runs on."
-        actions={<button className="btn primary" onClick={() => setOpen(true)}>+ New style</button>}
+        actions={can("merchandiser") ? <button className="btn primary" onClick={() => setOpen(true)}>+ New style</button> : undefined}
       />
       <Card>
         {loading ? <Spinner /> : (

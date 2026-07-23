@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
 import { CostSheet, Style } from "../api/types";
+import { useAuthorization } from "../auth/Authorization";
 import { Card, Chip, Drawer, ErrorBox, Field, PageHeader, Spinner } from "../components/ui";
 import { useToast } from "../components/Toast";
 import { useAsync } from "../lib/useAsync";
@@ -9,6 +10,8 @@ import { money, pct } from "../lib/format";
 const CATEGORIES = ["material", "trim", "sewing", "overhead", "other"];
 
 export default function Costing() {
+  const { can } = useAuthorization();
+  const editable = can("finance", "merchandiser");
   const styles = useAsync(() => api.get<Style[]>("/styles"));
   const [styleId, setStyleId] = useState(0);
   const sheets = useAsync(
@@ -38,7 +41,7 @@ export default function Costing() {
               <option value={0}>Select a style…</option>
               {styles.data?.map((s) => <option key={s.id} value={s.id}>{s.style_number} — {s.description}</option>)}
             </select>
-            {styleId ? <button className="btn primary" onClick={() => setOpen(true)}>+ New cost sheet</button> : null}
+            {editable && styleId ? <button className="btn primary" onClick={() => setOpen(true)}>+ New cost sheet</button> : null}
           </div>
         }
       />
@@ -51,7 +54,7 @@ export default function Costing() {
         <div className="grid" style={{ gap: 16 }}>
           {[...sheets.data].reverse().map((cs) => (
             <Card key={cs.id} title={`Version ${cs.version_no}`} hint={cs.currency}
-              actions={<div className="inline-actions"><Chip status={cs.status} />{cs.status === "draft" && <button className="btn sm" onClick={() => approve(cs.id)}>Approve</button>}</div>}>
+              actions={<div className="inline-actions"><Chip status={cs.status} />{editable && cs.status === "draft" && <button className="btn sm" onClick={() => approve(cs.id)}>Approve</button>}</div>}>
               <div className="grid cols-2" style={{ padding: 18, gap: 20 }}>
                 <div className="table-wrap">
                   <table className="tbl">

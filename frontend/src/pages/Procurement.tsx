@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
-import { Material, PurchaseOrder, Supplier } from "../api/types";
+import { GoodsReceipt as GoodsReceiptRecord, Material, PurchaseOrder, Supplier } from "../api/types";
+import { useAuthorization } from "../auth/Authorization";
 import { Card, Chip, Drawer, ErrorBox, Field, PageHeader, Spinner, Tabs } from "../components/ui";
+import { ListToolbar, PdfLink, useListView } from "../components/ListTools";
 import { useToast } from "../components/Toast";
 import { useAsync } from "../lib/useAsync";
 import { money, qty } from "../lib/format";
 
 export default function Procurement() {
+  const { can } = useAuthorization();
   const [tab, setTab] = useState("orders");
   return (
     <div>
@@ -15,28 +18,38 @@ export default function Procurement() {
         title="Procurement"
         subtitle="Purchase orders track received-vs-ordered; goods receipt is the pivot — it posts stock, creates a roll per physical roll, and books the payable."
       />
-      <Tabs tabs={[{ key: "orders", label: "Purchase Orders" }, { key: "receipt", label: "Goods Receipt" }]} active={tab} onChange={setTab} />
+      <Tabs tabs={[{ key: "orders", label: "Purchase Orders" }, ...(can("stores") ? [{ key: "receipt", label: "Post Receipt" }] : []), { key: "history", label: "Receipt History" }, { key: "performance", label: "Supplier Performance" }]} active={tab} onChange={setTab} />
       {tab === "orders" && <POs />}
-      {tab === "receipt" && <GoodsReceipt />}
+      {tab === "receipt" && <GoodsReceiptCapture />}
+      {tab === "history" && <GoodsReceiptHistory />}
+      {tab === "performance" && <SupplierPerformance />}
     </div>
   );
 }
 
 function POs() {
+  const { can } = useAuthorization();
   const pos = useAsync(() => api.get<PurchaseOrder[]>("/procurement/purchase-orders"));
   const [open, setOpen] = useState(false);
+  const view = useListView(pos.data ?? [], (po) => `${po.order_number} ${po.status} ${po.supplier_id}`, (a, b) => a.id - b.id);
+  const toast = useToast();
+  async function approve(id: number) {
+    try { await api.post(`/procurement/purchase-orders/${id}/approval`, { approved: true, comment: "Approved in purchasing workbench" }); toast.push("Purchase order approved"); pos.reload(); }
+    catch (error) { toast.push("Approval failed", { detail: (error as ApiError).message, bad: true }); }
+  }
   return (
-    <Card title="Purchase orders" actions={<button className="btn primary sm" onClick={() => setOpen(true)}>+ New PO</button>}>
+    <Card title="Purchase orders" actions={can("procurement") ? <button className="btn primary sm" onClick={() => setOpen(true)}>+ New PO</button> : undefined}>
+      <ListToolbar query={view.query} onQuery={view.setQuery} descending={view.descending} onDirection={view.toggleDirection} page={view.page} pages={view.pages} total={view.total} previous={view.previous} next={view.next} exportPath="/procurement/purchase-orders/export" placeholder="Search PO, supplier, status..." />
       {pos.loading ? <Spinner /> : (
         <div className="table-wrap">
           <table className="tbl">
-            <thead><tr><th>PO</th><th>Status</th><th className="num">Lines</th><th className="num">Value</th></tr></thead>
+            <thead><tr><th>PO</th><th>Status</th><th className="num">Lines</th><th className="num">Value</th><th></th></tr></thead>
             <tbody>
-              {[...(pos.data ?? [])].reverse().map((p) => (
+              {view.rows.map((p) => (
                 <tr key={p.id}><td className="code">{p.order_number}</td><td><Chip status={p.status} /></td>
-                  <td className="num">{p.lines.length}</td><td className="num">{money(p.total_value, p.currency)}</td></tr>
+                  <td className="num">{p.lines.length}</td><td className="num">{money(p.total_value, p.currency)}</td><td className="right"><div className="inline-actions"><PdfLink path={`/documents/purchase-orders/${p.id}/pdf`} />{can("procurement") && p.status === "pending_approval" && <button className="btn primary sm" onClick={() => approve(p.id)}>Approve</button>}</div></td></tr>
               ))}
-              {!pos.data?.length && <tr><td colSpan={4} className="muted">No purchase orders yet.</td></tr>}
+              {!view.rows.length && <tr><td colSpan={5} className="muted">No purchase orders match.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -51,6 +64,7 @@ function POForm({ onClose, onDone }: { onClose: () => void; onDone: () => void }
   const suppliers = useAsync(() => api.get<Supplier[]>("/masters/suppliers"));
   const materials = useAsync(() => api.get<Material[]>("/masters/materials"));
   const [supplierId, setSupplierId] = useState(0);
+  const [requiresApproval, setRequiresApproval] = useState(false);
   const [lines, setLines] = useState<{ material_id: number; ordered_qty: string; unit_price: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -65,6 +79,7 @@ function POForm({ onClose, onDone }: { onClose: () => void; onDone: () => void }
     try {
       await api.post("/procurement/purchase-orders", {
         supplier_id: Number(supplierId),
+        requires_approval: requiresApproval,
         lines: lines.map((l) => ({ material_id: Number(l.material_id), ordered_qty: l.ordered_qty, unit_price: l.unit_price })),
       });
       toast.push("Purchase order created"); onDone();
@@ -83,6 +98,7 @@ function POForm({ onClose, onDone }: { onClose: () => void; onDone: () => void }
           {suppliers.data?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </Field>
+      <label className="check-row"><input type="checkbox" checked={requiresApproval} onChange={(event) => setRequiresApproval(event.target.checked)} /> Route this PO for approval before receipt</label>
       <div className="flex-between" style={{ margin: "6px 0 10px" }}>
         <div className="section-title mt-0" style={{ margin: 0 }}>Lines</div>
         <button className="btn sm" onClick={addLine}>+ Add line</button>
@@ -102,7 +118,7 @@ function POForm({ onClose, onDone }: { onClose: () => void; onDone: () => void }
   );
 }
 
-function GoodsReceipt() {
+function GoodsReceiptCapture() {
   const pos = useAsync(() => api.get<PurchaseOrder[]>("/procurement/purchase-orders"));
   const toast = useToast();
   const [poId, setPoId] = useState(0);
@@ -195,4 +211,43 @@ function GoodsReceipt() {
       </Card>
     </div>
   );
+}
+
+function GoodsReceiptHistory() {
+  const receipts = useAsync(() => api.get<GoodsReceiptRecord[]>("/procurement/goods-receipts"));
+  return (
+    <Card title="Goods receipt history" hint="persisted roll-level receipts">
+      {receipts.loading ? <Spinner /> : (
+        <div className="table-wrap">
+          <table className="tbl">
+            <thead><tr><th>Receipt</th><th>PO</th><th>Supplier</th><th className="num">Rolls</th><th className="num">Length</th><th className="num">Value</th><th></th></tr></thead>
+            <tbody>
+              {receipts.data?.map((receipt) => (
+                <tr key={receipt.id}>
+                  <td className="code">{receipt.receipt_number}</td>
+                  <td className="mono">#{receipt.purchase_order_id}</td>
+                  <td className="mono">#{receipt.supplier_id}</td>
+                  <td className="num">{receipt.rolls.length}</td>
+                  <td className="num">{qty(receipt.total_length)} m</td>
+                  <td className="num">{money(receipt.total_value)}</td><td><PdfLink path={`/documents/goods-receipts/${receipt.id}/pdf`} /></td>
+                </tr>
+              ))}
+              {!receipts.data?.length && <tr><td colSpan={7} className="muted">No goods receipts yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+interface SupplierMetric { supplier_id: number; purchase_orders: number; receipts: number; ordered_value: string; ordered_qty: string; received_qty: string; fulfilment_pct: string; on_time_pct: string; acceptance_pct: string; }
+function SupplierPerformance() {
+  const metrics = useAsync(() => api.get<SupplierMetric[]>("/procurement/supplier-performance"));
+  const suppliers = useAsync(() => api.get<Supplier[]>("/masters/suppliers"));
+  const name = (id: number) => suppliers.data?.find((supplier) => supplier.id === id)?.name ?? `#${id}`;
+  return <Card title="Supplier performance" hint="Delivery, fulfilment, and quality outcomes">{metrics.loading ? <Spinner /> : <div className="table-wrap"><table className="tbl">
+    <thead><tr><th>Supplier</th><th className="num">POs</th><th className="num">Receipts</th><th className="num">Ordered value</th><th className="num">Fulfilment</th><th className="num">On time</th><th className="num">Accepted</th></tr></thead>
+    <tbody>{metrics.data?.map((row) => <tr key={row.supplier_id}><td>{name(row.supplier_id)}</td><td className="num">{row.purchase_orders}</td><td className="num">{row.receipts}</td><td className="num">{money(row.ordered_value)}</td><td className="num">{qty(row.fulfilment_pct)}%</td><td className="num">{qty(row.on_time_pct)}%</td><td className="num">{qty(row.acceptance_pct)}%</td></tr>)}{!metrics.data?.length && <tr><td colSpan={7} className="muted">No supplier activity yet.</td></tr>}</tbody>
+  </table></div>}</Card>;
 }

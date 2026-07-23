@@ -2,12 +2,14 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { BomVersion, Colour, Colourway, Material, SizeRange, Style } from "../api/types";
+import { useAuthorization } from "../auth/Authorization";
 import { Card, Chip, Drawer, ErrorBox, Field, PageHeader, Spinner } from "../components/ui";
 import { useToast } from "../components/Toast";
 import { useAsync } from "../lib/useAsync";
 import { pct, qty } from "../lib/format";
 
 export default function StyleDetail() {
+  const { can } = useAuthorization();
   const { id } = useParams();
   const sid = Number(id);
   const style = useAsync(() => api.get<Style>(`/styles/${sid}`), [sid]);
@@ -58,7 +60,7 @@ export default function StyleDetail() {
 
       <div className="grid cols-2">
         <Card title="Colourways" hint="Module 1.8"
-          actions={<button className="btn primary sm" onClick={() => setCwOpen(true)}>+ Add</button>}>
+          actions={can("merchandiser") ? <button className="btn primary sm" onClick={() => setCwOpen(true)}>+ Add</button> : undefined}>
           {cways.loading ? <Spinner /> : (
             <div className="table-wrap">
               <table className="tbl">
@@ -72,7 +74,7 @@ export default function StyleDetail() {
                       </td>
                       <td className="mono muted">{cw.buyer_reference || "—"}</td>
                       <td>{cw.lab_dip_approved ? <Chip tone="ok" label="Approved" /> : <Chip tone="warn" label="Pending" />}</td>
-                      <td className="right">{!cw.lab_dip_approved && <button className="btn sm" onClick={() => approveLabDip(cw.id)}>Approve</button>}</td>
+                      <td className="right">{can("quality_inspector", "merchandiser") && !cw.lab_dip_approved && <button className="btn sm" onClick={() => approveLabDip(cw.id)}>Approve</button>}</td>
                     </tr>
                   ))}
                   {!cways.data?.length && <tr><td colSpan={4} className="muted">No colourways.</td></tr>}
@@ -96,7 +98,7 @@ export default function StyleDetail() {
       </div>
 
       <div className="section-title">Bill of Materials — versioned</div>
-      <Card actions={<button className="btn primary sm" onClick={() => setBomOpen(true)}>+ New BOM version</button>} title="BOM versions" hint="approving supersedes the prior — history preserved">
+      <Card actions={can("merchandiser") ? <button className="btn primary sm" onClick={() => setBomOpen(true)}>+ New BOM version</button> : undefined} title="BOM versions" hint="approving supersedes the prior — history preserved">
         {boms.loading ? <Spinner /> : (
           <div style={{ padding: boms.data?.length ? 0 : undefined }}>
             {!boms.data?.length && <div className="empty"><div className="big">No BOM yet</div>Create the first per-size recipe for this style.</div>}
@@ -108,7 +110,7 @@ export default function StyleDetail() {
                     <Chip status={b.status} />
                     {b.approved_by && <span className="mono muted" style={{ fontSize: 11 }}>by {b.approved_by}</span>}
                   </div>
-                  {b.status === "draft" && <button className="btn sm" onClick={() => approveBom(b.id)}>Approve</button>}
+                  {can("merchandiser") && b.status === "draft" && <button className="btn sm" onClick={() => approveBom(b.id)}>Approve</button>}
                 </div>
                 <div className="table-wrap" style={{ padding: "0 18px 14px" }}>
                   <table className="tbl">

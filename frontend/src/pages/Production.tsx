@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
-import { Colour, CutOrder, SewingOrder, SizeRange, Style, Subcontract, Supplier } from "../api/types";
+import { Colour, CutOrder, ProductionRoute, SewingOrder, SizeRange, Style, Subcontract, Supplier, WipSummary } from "../api/types";
+import { useAuthorization } from "../auth/Authorization";
 import { Card, Chip, Drawer, ErrorBox, Field, PageHeader, Spinner, Tabs } from "../components/ui";
 import { useToast } from "../components/Toast";
 import { useAsync } from "../lib/useAsync";
+import { PdfLink } from "../components/ListTools";
 import { num, pct, qty } from "../lib/format";
 
 export default function Production() {
@@ -15,9 +17,10 @@ export default function Production() {
         title="Production"
         subtitle="Cut orders compute fabric from the size-BOM, issue rolls as ledger consumption, then sewing runs with SAM-based efficiency. Subcontracting tracks the outstanding balance."
       />
-      <Tabs tabs={[{ key: "cut", label: "Cut Orders" }, { key: "sew", label: "Sewing" }, { key: "sub", label: "Subcontract" }]} active={tab} onChange={setTab} />
+      <Tabs tabs={[{ key: "cut", label: "Cut Orders" }, { key: "sew", label: "Sewing" }, { key: "routing", label: "Routing & WIP" }, { key: "sub", label: "Subcontract" }]} active={tab} onChange={setTab} />
       {tab === "cut" && <CutOrders />}
       {tab === "sew" && <Sewing />}
+      {tab === "routing" && <RoutingWip />}
       {tab === "sub" && <Subcontracts />}
     </div>
   );
@@ -25,6 +28,7 @@ export default function Production() {
 
 /* ---------------- Cut orders ---------------- */
 function CutOrders() {
+  const { can } = useAuthorization();
   const cuts = useAsync(() => api.get<CutOrder[]>("/production/cut-orders"));
   const styles = useAsync(() => api.get<Style[]>("/styles"));
   const [open, setOpen] = useState(false);
@@ -42,7 +46,7 @@ function CutOrders() {
   }
 
   return (
-    <Card title="Cut orders" actions={<button className="btn primary sm" onClick={() => setOpen(true)}>+ New cut order</button>}>
+    <Card title="Cut orders" actions={can("planner", "cutting_supervisor") ? <button className="btn primary sm" onClick={() => setOpen(true)}>+ New cut order</button> : undefined}>
       {cuts.loading ? <Spinner /> : (
         <div className="table-wrap">
           <table className="tbl">
@@ -58,9 +62,10 @@ function CutOrders() {
                   <td className="num">{num(c.pieces_cut)}</td>
                   <td>
                     <div className="inline-actions">
-                      {c.status === "planned" && <button className="btn sm" onClick={() => act(c, "reserve")}>Reserve</button>}
-                      {(c.status === "fabric_reserved" || c.status === "planned") && <button className="btn sm" onClick={() => act(c, "issue")}>Issue</button>}
-                      {c.status === "in_cutting" && <button className="btn sm" onClick={() => act(c, "complete")}>Complete</button>}
+                      <PdfLink path={`/documents/cut-orders/${c.id}/pdf`} />
+                      {can("planner", "stores") && c.status === "planned" && <button className="btn sm" onClick={() => act(c, "reserve")}>Reserve</button>}
+                      {can("stores", "cutting_supervisor") && (c.status === "fabric_reserved" || c.status === "planned") && <button className="btn sm" onClick={() => act(c, "issue")}>Issue</button>}
+                      {can("cutting_supervisor") && c.status === "in_cutting" && <button className="btn sm" onClick={() => act(c, "complete")}>Complete</button>}
                     </div>
                   </td>
                 </tr>
@@ -135,29 +140,21 @@ function CutForm({ onClose, onDone }: { onClose: () => void; onDone: () => void 
 
 /* ---------------- Sewing ---------------- */
 function Sewing() {
-  // The backend exposes create + single-GET (no list); we hold the session's
-  // orders locally and re-fetch a single order after recording output.
-  const [items, setItems] = useState<SewingOrder[]>([]);
+  const { can } = useAuthorization();
+  const orders = useAsync(() => api.get<SewingOrder[]>("/production/sewing-orders"));
   const styles = useAsync(() => api.get<Style[]>("/styles"));
   const [open, setOpen] = useState(false);
   const [output, setOutput] = useState<SewingOrder | null>(null);
   const styleNo = (id: number) => styles.data?.find((s) => s.id === id)?.style_number ?? `#${id}`;
 
-  async function refresh(id: number) {
-    try {
-      const fresh = await api.get<SewingOrder>(`/production/sewing-orders/${id}`);
-      setItems((xs) => xs.map((x) => (x.id === id ? fresh : x)));
-    } catch { /* ignore */ }
-  }
-
   return (
     <Card title="Sewing orders" hint="SAM-based line efficiency"
-      actions={<button className="btn primary sm" onClick={() => setOpen(true)}>+ New sewing order</button>}>
+      actions={can("planner", "sewing_supervisor") ? <button className="btn primary sm" onClick={() => setOpen(true)}>+ New sewing order</button> : undefined}>
       <div className="table-wrap">
         <table className="tbl">
           <thead><tr><th>Sew №</th><th>Style</th><th>Line</th><th>Status</th><th className="num">Planned</th><th className="num">Produced</th><th className="num">Avg eff.</th><th></th></tr></thead>
           <tbody>
-            {items.map((s) => (
+            {(orders.data ?? []).map((s) => (
               <tr key={s.id}>
                 <td className="code">{s.order_number}</td>
                 <td>{styleNo(s.style_id)}</td>
@@ -166,20 +163,20 @@ function Sewing() {
                 <td className="num">{num(s.planned_qty)}</td>
                 <td className="num">{num(s.produced_qty)}</td>
                 <td className="num">{pct(s.average_efficiency_pct)}</td>
-                <td className="right"><button className="btn sm" onClick={() => setOutput(s)}>+ Output</button></td>
+                <td className="right"><div className="inline-actions"><PdfLink path={`/documents/sewing-orders/${s.id}/pdf`} />{can("sewing_supervisor") && <button className="btn sm" onClick={() => setOutput(s)}>+ Output</button>}</div></td>
               </tr>
             ))}
-            {!items.length && <tr><td colSpan={8} className="muted">No sewing orders in view. Create one to begin.</td></tr>}
+            {!orders.data?.length && <tr><td colSpan={8} className="muted">No sewing orders yet.</td></tr>}
           </tbody>
         </table>
       </div>
-      {open && <SewForm styles={styles.data ?? []} onClose={() => setOpen(false)} onDone={(o) => { setOpen(false); if (o) setItems([o, ...items]); }} />}
-      {output && <OutputForm sewing={output} onClose={() => setOutput(null)} onDone={() => { const id = output.id; setOutput(null); refresh(id); }} />}
+      {open && <SewForm styles={styles.data ?? []} onClose={() => setOpen(false)} onDone={() => { setOpen(false); orders.reload(); }} />}
+      {output && <OutputForm sewing={output} onClose={() => setOutput(null)} onDone={() => { setOutput(null); orders.reload(); }} />}
     </Card>
   );
 }
 
-function SewForm({ styles, onClose, onDone }: { styles: Style[]; onClose: () => void; onDone: (o?: SewingOrder) => void }) {
+function SewForm({ styles, onClose, onDone }: { styles: Style[]; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const [styleId, setStyleId] = useState(0);
   const [line, setLine] = useState("Line 1");
@@ -190,7 +187,7 @@ function SewForm({ styles, onClose, onDone }: { styles: Style[]; onClose: () => 
     setSaving(true); setError(null);
     try {
       const o = await api.post<SewingOrder>("/production/sewing-orders", { style_id: Number(styleId), line, planned_qty: Number(planned) });
-      toast.push(`Sewing order ${o.order_number} created`); onDone(o);
+      toast.push(`Sewing order ${o.order_number} created`); onDone();
     } catch (e) { const m = (e as ApiError).message; setError(m); toast.push("Failed", { detail: m, bad: true }); }
     finally { setSaving(false); }
   }
@@ -244,9 +241,70 @@ function OutputForm({ sewing, onClose, onDone }: { sewing: SewingOrder; onClose:
   );
 }
 
+/* ---------------- Routing and WIP ---------------- */
+function RoutingWip() {
+  const { can } = useAuthorization();
+  const routes = useAsync(() => api.get<ProductionRoute[]>("/production/routes"));
+  const sewing = useAsync(() => api.get<SewingOrder[]>("/production/sewing-orders"));
+  const styles = useAsync(() => api.get<Style[]>("/styles"));
+  const [sewingId, setSewingId] = useState(0);
+  const selected = sewing.data?.find((order) => order.id === sewingId);
+  const activeRoute = routes.data?.find((route) => route.style_id === selected?.style_id && route.active);
+  const [stepId, setStepId] = useState(0);
+  const [quantityIn, setQuantityIn] = useState("0");
+  const [quantityOut, setQuantityOut] = useState("0");
+  const [rejected, setRejected] = useState("0");
+  const [open, setOpen] = useState(false);
+  const toast = useToast();
+  const summary = useAsync(() => sewingId ? api.get<WipSummary[]>(`/production/sewing-orders/${sewingId}/wip`) : Promise.resolve([]), [sewingId]);
+  const styleName = (id: number) => styles.data?.find((style) => style.id === id)?.style_number ?? `#${id}`;
+  async function postWip() {
+    try {
+      await api.post(`/production/sewing-orders/${sewingId}/wip`, { route_step_id: stepId, quantity_in: Number(quantityIn), quantity_out: Number(quantityOut), rejected_qty: Number(rejected) });
+      toast.push("WIP movement posted"); summary.reload(); setQuantityIn("0"); setQuantityOut("0"); setRejected("0");
+    } catch (error) { toast.push("WIP posting failed", { detail: (error as ApiError).message, bad: true }); }
+  }
+  return <div className="grid cols-2">
+    <Card title="Production routes" hint="Versioned operation sequences" actions={can("planner") ? <button className="btn primary sm" onClick={() => setOpen(true)}>+ New route</button> : undefined}>
+      <div className="table-wrap"><table className="tbl"><thead><tr><th>Route</th><th>Style</th><th>Version</th><th>Steps</th><th>Status</th></tr></thead><tbody>
+        {routes.data?.map((route) => <tr key={route.id}><td className="code">{route.route_number}</td><td>{styleName(route.style_id)}</td><td className="num">{route.version_no}</td><td>{route.steps.map((step) => step.operation).join(" / ")}</td><td><Chip tone={route.active ? "ok" : "neutral"} label={route.active ? "Active" : "Superseded"} /></td></tr>)}
+        {!routes.data?.length && <tr><td colSpan={5} className="muted">No production routes defined.</td></tr>}
+      </tbody></table></div>
+    </Card>
+    <Card title="WIP workbench" hint="Quantity at each routing step" pad>
+      <Field label="Sewing order"><select className="select" value={sewingId} onChange={(event) => { setSewingId(Number(event.target.value)); setStepId(0); }}><option value={0}>Select...</option>{sewing.data?.map((order) => <option key={order.id} value={order.id}>{order.order_number} - {styleName(order.style_id)}</option>)}</select></Field>
+      {activeRoute && <><Field label="Route step"><select className="select" value={stepId} onChange={(event) => setStepId(Number(event.target.value))}><option value={0}>Select...</option>{activeRoute.steps.map((step) => <option key={step.id} value={step.id}>{step.sequence}. {step.operation}</option>)}</select></Field>
+      <div className="form-row three"><Field label="Quantity in"><input className="input mono" value={quantityIn} onChange={(event) => setQuantityIn(event.target.value)} /></Field><Field label="Quantity out"><input className="input mono" value={quantityOut} onChange={(event) => setQuantityOut(event.target.value)} /></Field><Field label="Rejected"><input className="input mono" value={rejected} onChange={(event) => setRejected(event.target.value)} /></Field></div>
+      {can("planner", "sewing_supervisor") && <button className="btn primary" disabled={!stepId} onClick={postWip}>Post WIP movement</button>}
+      <div className="divider" /><div className="table-wrap"><table className="tbl"><thead><tr><th>Step</th><th className="num">In</th><th className="num">Out</th><th className="num">Reject</th><th className="num">WIP</th></tr></thead><tbody>{summary.data?.map((row) => <tr key={row.route_step_id}><td>{row.sequence}. {row.operation}</td><td className="num">{row.quantity_in}</td><td className="num">{row.quantity_out}</td><td className="num">{row.rejected_qty}</td><td className="num"><b>{row.wip_qty}</b></td></tr>)}</tbody></table></div></>}
+      {selected && !activeRoute && <div className="err">This style has no active production route.</div>}
+    </Card>
+    {open && <RouteForm styles={styles.data ?? []} onClose={() => setOpen(false)} onDone={() => { setOpen(false); routes.reload(); }} />}
+  </div>;
+}
+
+function RouteForm({ styles, onClose, onDone }: { styles: Style[]; onClose: () => void; onDone: () => void }) {
+  const [styleId, setStyleId] = useState(0);
+  const [name, setName] = useState("Main production route");
+  const [steps, setSteps] = useState("Cut handover, Join shoulder, Attach neck, Sleeve set, Side seam, Finishing");
+  const [error, setError] = useState("");
+  const toast = useToast();
+  async function save() {
+    try {
+      await api.post("/production/routes", { style_id: styleId, name, steps: steps.split(",").map((operation, index) => ({ sequence: (index + 1) * 10, operation: operation.trim() })).filter((step) => step.operation) });
+      toast.push("Production route created"); onDone();
+    } catch (caught) { const message = (caught as ApiError).message; setError(message); toast.push("Route failed", { detail: message, bad: true }); }
+  }
+  return <Drawer title="New production route" sub="Versioned operation sequence" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!styleId || !name.trim()} onClick={save}>Create route</button></>}>
+    {error && <ErrorBox message={error} />}<Field label="Style" required><select className="select" value={styleId} onChange={(event) => setStyleId(Number(event.target.value))}><option value={0}>Select...</option>{styles.map((style) => <option key={style.id} value={style.id}>{style.style_number}</option>)}</select></Field>
+    <Field label="Route name"><input className="input" value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label="Operations" hint="Comma-separated, in production sequence"><textarea className="input" value={steps} onChange={(event) => setSteps(event.target.value)} /></Field>
+  </Drawer>;
+}
+
 /* ---------------- Subcontract ---------------- */
 function Subcontracts() {
-  const [items, setItems] = useState<Subcontract[]>([]);
+  const { can } = useAuthorization();
+  const orders = useAsync(() => api.get<Subcontract[]>("/production/subcontract-orders"));
   const suppliers = useAsync(() => api.get<Supplier[]>("/masters/suppliers"));
   const [open, setOpen] = useState(false);
   const toast = useToast();
@@ -256,33 +314,33 @@ function Subcontracts() {
     const val = prompt(`Receive how many from ${sc.order_number}? (outstanding ${sc.outstanding_qty})`);
     if (!val) return;
     try {
-      const upd = await api.post<Subcontract>(`/production/subcontract-orders/${sc.id}/receive`, { received_qty: Number(val) });
-      setItems(items.map((x) => (x.id === upd.id ? upd : x)));
+      await api.post<Subcontract>(`/production/subcontract-orders/${sc.id}/receive`, { received_qty: Number(val) });
+      orders.reload();
       toast.push("Receipt reconciled");
     } catch (e) { toast.push("Failed", { detail: (e as ApiError).message, bad: true }); }
   }
 
   return (
     <Card title="Subcontract orders" hint="outstanding balance tracked"
-      actions={<button className="btn primary sm" onClick={() => setOpen(true)}>+ New subcontract</button>}>
+      actions={can("planner", "procurement") ? <button className="btn primary sm" onClick={() => setOpen(true)}>+ New subcontract</button> : undefined}>
       <div className="table-wrap">
         <table className="tbl">
           <thead><tr><th>Order</th><th>Process</th><th>Subcontractor</th><th className="num">Sent</th><th className="num">Received</th><th className="num">Outstanding</th><th>Status</th><th></th></tr></thead>
           <tbody>
-            {items.map((s) => (
+            {(orders.data ?? []).map((s) => (
               <tr key={s.id}>
                 <td className="code">{s.order_number}</td><td>{s.process}</td><td>{supName(s.subcontractor_id)}</td>
                 <td className="num">{num(s.sent_qty)}</td><td className="num">{num(s.received_qty)}</td>
                 <td className="num" style={{ color: s.outstanding_qty > 0 ? "var(--madder)" : "var(--ok)" }}>{num(s.outstanding_qty)}</td>
                 <td><Chip status={s.status} /></td>
-                <td className="right">{s.outstanding_qty > 0 && <button className="btn sm" onClick={() => receive(s)}>Receive</button>}</td>
+                <td className="right">{can("stores", "planner") && s.outstanding_qty > 0 && <button className="btn sm" onClick={() => receive(s)}>Receive</button>}</td>
               </tr>
             ))}
-            {!items.length && <tr><td colSpan={8} className="muted">No subcontract orders in view. Create one to begin.</td></tr>}
+            {!orders.data?.length && <tr><td colSpan={8} className="muted">No subcontract orders yet.</td></tr>}
           </tbody>
         </table>
       </div>
-      {open && <SubForm suppliers={suppliers.data ?? []} onClose={() => setOpen(false)} onDone={(sc) => { setOpen(false); setItems([sc, ...items]); }} />}
+      {open && <SubForm suppliers={suppliers.data ?? []} onClose={() => setOpen(false)} onDone={() => { setOpen(false); orders.reload(); }} />}
     </Card>
   );
 }

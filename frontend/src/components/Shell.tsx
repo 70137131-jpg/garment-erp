@@ -1,34 +1,46 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { AuthUser } from "../api/client";
 
-const NAV = [
+interface NavItem {
+  to: string;
+  ic: string;
+  name: string;
+  end?: boolean;
+}
+
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+const NAV: NavGroup[] = [
   {
     label: "Overview",
-    items: [{ to: "/", ic: "▦", name: "Dashboard", end: true }],
+    items: [{ to: "/", ic: "DB", name: "Dashboard", end: true }],
   },
   {
     label: "Commercial",
     items: [
       { to: "/sales", ic: "SO", name: "Sales Orders" },
       { to: "/styles", ic: "ST", name: "Styles & BOM" },
-      { to: "/costing", ic: "$", name: "Costing" },
+      { to: "/costing", ic: "CO", name: "Costing" },
     ],
   },
   {
     label: "Supply & Make",
     items: [
       { to: "/procurement", ic: "PO", name: "Procurement" },
-      { to: "/inventory", ic: "▤", name: "Inventory" },
-      { to: "/production", ic: "✂", name: "Production" },
+      { to: "/inventory", ic: "IN", name: "Inventory" },
+      { to: "/production", ic: "PR", name: "Production" },
       { to: "/quality", ic: "QC", name: "Quality" },
     ],
   },
   {
     label: "Back office",
     items: [
-      { to: "/masters", ic: "◆", name: "Master Data" },
-      { to: "/finance", ic: "₤", name: "Finance" },
+      { to: "/masters", ic: "MD", name: "Master Data" },
+      { to: "/finance", ic: "FN", name: "Finance" },
     ],
   },
 ];
@@ -47,8 +59,8 @@ const PAGE_PERMISSION: Record<string, string> = {
 
 function crumbFor(path: string): string {
   if (path === "/") return "Dashboard";
-  const seg = path.split("/")[1];
-  const map: Record<string, string> = {
+  const segment = path.split("/")[1];
+  const labels: Record<string, string> = {
     sales: "Sales Orders",
     styles: "Styles & BOM",
     costing: "Costing",
@@ -60,63 +72,132 @@ function crumbFor(path: string): string {
     finance: "Finance",
     users: "Access Control",
   };
-  return map[seg] ?? seg;
+  return labels[segment] ?? segment;
+}
+
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
 }
 
 export function Shell({ children, user, onLogout }: { children: ReactNode; user: AuthUser; onLogout: () => void }) {
-  const loc = useLocation();
+  const location = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => setMenuOpen(false), [location.pathname]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [menuOpen]);
 
   return (
-    <div className="shell">
-      <aside className="sidebar">
+    <div className={`shell ${menuOpen ? "nav-open" : ""}`}>
+      <button
+        className="sidebar-scrim"
+        type="button"
+        aria-label="Close navigation"
+        onClick={() => setMenuOpen(false)}
+      />
+
+      <aside className="sidebar" aria-label="Primary navigation">
         <div className="brand">
-          <div className="mark">
-            <div className="glyph" />
+          <div className="mark" aria-label="Atelier Garment ERP">
+            <div className="brand-symbol" aria-hidden="true"><span /></div>
             <div>
               <div className="name">Atelier</div>
               <div className="sub">Garment ERP</div>
             </div>
           </div>
+          <button className="sidebar-close" type="button" aria-label="Close navigation" onClick={() => setMenuOpen(false)}>
+            Close
+          </button>
         </div>
+
+        <div className="workspace-label">
+          <span className="workspace-dot" />
+          Manufacturing workspace
+        </div>
+
         <nav className="nav">
-          {NAV.map((group) => (
-            <div className="nav-group" key={group.label}>
-              <div className="nav-label">{group.label}</div>
-              {group.items
-                .filter((item) => !PAGE_PERMISSION[item.to] || user.permissions.includes(PAGE_PERMISSION[item.to]))
-                .map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={(item as any).end}
-                  className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
-                >
-                  <span className="ic">{item.ic}</span>
-                  {item.name}
-                </NavLink>
-              ))}
-            </div>
-          ))}
+          {NAV.map((group) => {
+            const visibleItems = group.items.filter(
+              (item) => !PAGE_PERMISSION[item.to] || user.permissions.includes(PAGE_PERMISSION[item.to])
+            );
+            if (visibleItems.length === 0) return null;
+            return (
+              <div className="nav-group" key={group.label}>
+                <div className="nav-label">{group.label}</div>
+                {visibleItems.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.end}
+                    className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
+                  >
+                    <span className="ic" aria-hidden="true">{item.ic}</span>
+                    <span>{item.name}</span>
+                  </NavLink>
+                ))}
+              </div>
+            );
+          })}
           {user.permissions.includes("users:manage") && (
             <div className="nav-group">
               <div className="nav-label">Administration</div>
               <NavLink to="/users" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
-                <span className="ic">AC</span>Access Control
+                <span className="ic" aria-hidden="true">AC</span>
+                <span>Access Control</span>
               </NavLink>
             </div>
           )}
         </nav>
+
+        <div className="sidebar-user">
+          <div className="avatar" aria-hidden="true">{initials(user.display_name)}</div>
+          <div className="sidebar-user-copy">
+            <strong>{user.display_name}</strong>
+            <span>{user.email}</span>
+          </div>
+        </div>
       </aside>
 
       <div className="main">
         <header className="topbar">
-          <div className="crumbs">
-            Atelier / <b>{crumbFor(loc.pathname)}</b>
+          <div className="topbar-left">
+            <button
+              className="menu-button"
+              type="button"
+              aria-label="Open navigation"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen(true)}
+            >
+              <span /><span /><span />
+            </button>
+            <div className="crumbs">
+              <span>Operations</span>
+              <span className="crumb-separator" aria-hidden="true">/</span>
+              <b>{crumbFor(location.pathname)}</b>
+            </div>
           </div>
           <div className="topbar-right">
+            <div className="system-state"><span /> Workspace online</div>
             <div className="user-chip">
-              <div><b>{user.display_name}</b><small>{user.roles.join(" · ")}</small></div>
-              <button className="btn ghost" onClick={onLogout}>Sign out</button>
+              <div className="avatar small" aria-hidden="true">{initials(user.display_name)}</div>
+              <div className="user-copy">
+                <b>{user.display_name}</b>
+                <small>{user.roles.join(" / ")}</small>
+              </div>
+              <button className="btn ghost sm" type="button" onClick={onLogout}>Sign out</button>
             </div>
           </div>
         </header>
