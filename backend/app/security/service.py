@@ -180,6 +180,30 @@ def revoke_user_sessions(
         session.add(auth_session)
 
 
+def reset_user_password(
+    session: Session,
+    user: User,
+    temporary_password: str,
+    *,
+    actor_user_id: int | None = None,
+) -> None:
+    """Set a temporary password, unlock the account, and revoke all sessions."""
+    validate_password(temporary_password)
+    user.password_hash = hash_password(temporary_password)
+    user.must_change_password = True
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.updated_at = utcnow()
+    session.add(user)
+    revoke_user_sessions(session, user.id)
+    audit(
+        session,
+        "admin_password_reset",
+        actor_user_id=actor_user_id,
+        target_user_id=user.id,
+    )
+
+
 def audit(
     session: Session,
     event_type: str,

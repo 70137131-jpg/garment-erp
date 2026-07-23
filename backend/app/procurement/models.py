@@ -9,23 +9,32 @@ Quantities on PO lines are held in the material's **base UoM** (metres) so
 received-vs-ordered compares cleanly against roll lengths and the stock ledger.
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import List, Optional
 
 from sqlmodel import Field, Relationship, SQLModel
 
-from ..kernel.audit import TimestampMixin
+from ..kernel.audit import TimestampMixin, utcnow
 from ..kernel.types import money_field, quantity_field
 
 
 class PurchaseOrderStatus(str, Enum):
     draft = "draft"
+    pending_approval = "pending_approval"
     issued = "issued"
+    rejected = "rejected"
     partially_received = "partially_received"
     received = "received"
     closed = "closed"
+    cancelled = "cancelled"
+
+
+class PurchaseRequisitionStatus(str, Enum):
+    draft = "draft"
+    partially_ordered = "partially_ordered"
+    ordered = "ordered"
     cancelled = "cancelled"
 
 
@@ -51,6 +60,9 @@ class PurchaseOrder(PurchaseOrderBase, TimestampMixin, table=True):
     status: PurchaseOrderStatus = Field(
         default=PurchaseOrderStatus.draft, index=True
     )
+    requires_approval: bool = False
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
 
     lines: List["PurchaseOrderLine"] = Relationship(
         back_populates="order",
@@ -135,6 +147,7 @@ class PurchaseOrderLineInput(SQLModel):
 
 
 class PurchaseOrderCreate(PurchaseOrderBase):
+    requires_approval: bool = False
     lines: List[PurchaseOrderLineInput] = []
 
 
@@ -154,6 +167,9 @@ class PurchaseOrderRead(PurchaseOrderBase):
     order_number: str
     status: PurchaseOrderStatus
     total_value: Decimal
+    requires_approval: bool = False
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
     lines: List[PurchaseOrderLineRead]
 
 
@@ -197,3 +213,148 @@ class GoodsReceiptRead(SQLModel):
     total_length: Decimal
     total_value: Decimal
     rolls: List[GoodsReceiptRollRead]
+
+
+class PurchaseOrderRevision(SQLModel, table=True):
+    __tablename__ = "purchase_order_revision"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    purchase_order_id: int = Field(foreign_key="purchase_order.id", index=True)
+    revision_no: int
+    action: str = Field(index=True)
+    reason: str
+    snapshot_json: str
+    created_at: datetime = Field(default_factory=utcnow, nullable=False)
+    created_by: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+# Purchase requisitions — demand before a supplier-specific PO exists.
+# --------------------------------------------------------------------------- #
+class PurchaseRequisition(TimestampMixin, table=True):
+    __tablename__ = "purchase_requisition"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    requisition_number: str = Field(index=True, unique=True)
+    sales_order_id: Optional[int] = Field(default=None, foreign_key="sales_order.id", index=True)
+    suggested_supplier_id: Optional[int] = Field(default=None, foreign_key="supplier.id", index=True)
+    requested_date: Optional[date] = None
+    status: PurchaseRequisitionStatus = Field(default=PurchaseRequisitionStatus.draft, index=True)
+    notes: Optional[str] = None
+
+
+class PurchaseRequisitionLine(SQLModel, table=True):
+    __tablename__ = "purchase_requisition_line"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    purchase_requisition_id: int = Field(foreign_key="purchase_requisition.id", index=True)
+    material_requirement_id: Optional[int] = Field(
+        default=None, foreign_key="sales_order_material_requirement.id", index=True
+    )
+    material_id: int = Field(foreign_key="material.id", index=True)
+    requested_qty: Decimal = quantity_field(default=Decimal("0"))
+    ordered_qty: Decimal = quantity_field(default=Decimal("0"))
+    uom: str = "metre"
+    note: Optional[str] = None
+
+
+class PurchaseOrderRequisitionLine(SQLModel, table=True):
+    """Allocation link that lets one PO line cover several requisition lines."""
+
+    __tablename__ = "purchase_order_requisition_line"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    purchase_order_line_id: int = Field(foreign_key="purchase_order_line.id", index=True)
+    purchase_requisition_line_id: int = Field(
+        foreign_key="purchase_requisition_line.id", index=True
+    )
+    allocated_qty: Decimal = quantity_field(default=Decimal("0"))
+
+
+class PurchaseOrderRevisionRead(SQLModel):
+    id: int
+    purchase_order_id: int
+    revision_no: int
+    action: str
+    reason: str
+    snapshot_json: str
+    created_at: datetime
+    created_by: Optional[str]
+
+
+class PurchaseOrderAmendRequest(SQLModel):
+    expected_date: Optional[date] = None
+    notes: Optional[str] = None
+    lines: Optional[List[PurchaseOrderLineInput]] = None
+    reason: str
+
+
+class PurchaseRequisitionLineInput(SQLModel):
+    material_id: int
+    requested_qty: Decimal
+    uom: str = "metre"
+    note: Optional[str] = None
+
+
+class PurchaseRequisitionCreate(SQLModel):
+    sales_order_id: Optional[int] = None
+    suggested_supplier_id: Optional[int] = None
+    requested_date: Optional[date] = None
+    notes: Optional[str] = None
+    lines: List[PurchaseRequisitionLineInput]
+
+
+class PurchaseRequisitionLineRead(SQLModel):
+    id: int
+    material_requirement_id: Optional[int]
+    material_id: int
+    requested_qty: Decimal
+    ordered_qty: Decimal
+    outstanding_qty: Decimal
+    uom: str
+    note: Optional[str]
+
+
+class PurchaseRequisitionRead(SQLModel):
+    id: int
+    requisition_number: str
+    sales_order_id: Optional[int]
+    suggested_supplier_id: Optional[int]
+    requested_date: Optional[date]
+    status: PurchaseRequisitionStatus
+    notes: Optional[str]
+    lines: List[PurchaseRequisitionLineRead]
+
+
+class RequisitionPoLineInput(PurchaseOrderLineInput):
+    requisition_line_ids: List[int]
+
+
+class PurchaseOrderFromRequisitions(SQLModel):
+    supplier_id: int
+    currency: str = "USD"
+    order_date: Optional[date] = None
+    expected_date: Optional[date] = None
+    notes: Optional[str] = None
+    requires_approval: bool = False
+    lines: List[RequisitionPoLineInput]
+
+
+class PurchaseOrderApprovalRequest(SQLModel):
+    approved: bool
+    comment: str
+
+
+class SupplierPerformanceRead(SQLModel):
+    supplier_id: int
+    purchase_orders: int
+    receipts: int
+    ordered_value: Decimal
+    ordered_qty: Decimal
+    received_qty: Decimal
+    fulfilment_pct: Decimal
+    on_time_receipts: int
+    on_time_pct: Decimal
+    accepted_rolls: int
+    rejected_rolls: int
+    acceptance_pct: Decimal

@@ -8,7 +8,7 @@ the immutable ledger (5.3) and consumes the matching reservations. Completing a
 cut order emits ``ProductionConfirmed``.
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import List, Optional
@@ -277,3 +277,105 @@ class SubcontractRead(SQLModel):
     outstanding_qty: int
     rate: Decimal
     status: SubcontractStatus
+
+
+# --------------------------------------------------------------------------- #
+# Production routing and WIP - route definitions plus append-only movements.
+# --------------------------------------------------------------------------- #
+class ProductionRoute(SQLModel, table=True):
+    __tablename__ = "production_route"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    route_number: str = Field(index=True, unique=True)
+    style_id: int = Field(foreign_key="style.id", index=True)
+    name: str
+    version_no: int = 1
+    active: bool = True
+    created_at: datetime = Field(default_factory=utcnow, nullable=False)
+
+
+class ProductionRouteStep(SQLModel, table=True):
+    __tablename__ = "production_route_step"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    route_id: int = Field(foreign_key="production_route.id", index=True)
+    sequence: int
+    operation: str
+    work_center: Optional[str] = None
+    standard_minutes: Decimal = rate_field(default=Decimal("0"))
+    subcontract_allowed: bool = False
+
+
+class WipMovement(SQLModel, table=True):
+    __tablename__ = "wip_movement"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    movement_number: str = Field(index=True, unique=True)
+    sewing_order_id: int = Field(foreign_key="sewing_order.id", index=True)
+    route_step_id: int = Field(foreign_key="production_route_step.id", index=True)
+    quantity_in: int = 0
+    quantity_out: int = 0
+    rejected_qty: int = 0
+    recorded_at: datetime = Field(default_factory=utcnow, nullable=False)
+    recorded_by: Optional[str] = None
+    note: Optional[str] = None
+
+
+class RouteStepInput(SQLModel):
+    sequence: int
+    operation: str
+    work_center: Optional[str] = None
+    standard_minutes: Decimal = Decimal("0")
+    subcontract_allowed: bool = False
+
+
+class ProductionRouteCreate(SQLModel):
+    style_id: int
+    name: str
+    steps: List[RouteStepInput]
+
+
+class RouteStepRead(RouteStepInput):
+    id: int
+
+
+class ProductionRouteRead(SQLModel):
+    id: int
+    route_number: str
+    style_id: int
+    name: str
+    version_no: int
+    active: bool
+    steps: List[RouteStepRead] = []
+
+
+class WipMovementCreate(SQLModel):
+    route_step_id: int
+    quantity_in: int = 0
+    quantity_out: int = 0
+    rejected_qty: int = 0
+    note: Optional[str] = None
+
+
+class WipMovementRead(SQLModel):
+    id: int
+    movement_number: str
+    sewing_order_id: int
+    route_step_id: int
+    quantity_in: int
+    quantity_out: int
+    rejected_qty: int
+    recorded_at: datetime
+    recorded_by: Optional[str]
+    note: Optional[str]
+
+
+class WipStepSummary(SQLModel):
+    route_step_id: int
+    sequence: int
+    operation: str
+    work_center: Optional[str]
+    quantity_in: int
+    quantity_out: int
+    rejected_qty: int
+    wip_qty: int

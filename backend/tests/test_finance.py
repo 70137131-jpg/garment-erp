@@ -47,6 +47,9 @@ def test_manual_journal_and_reversal(finance_client):
     # Cannot reverse twice.
     again = finance_client.post(f"/finance/journal-entries/{entry['id']}/reverse")
     assert again.status_code == 409
+    listed = finance_client.get("/finance/journal-entries").json()
+    assert len(listed) == 2
+    assert listed[0]["memo"].startswith("Reversal of")
 
 
 def test_goods_receipt_auto_posts_ap_and_inventory(finance_client, session):

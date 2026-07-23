@@ -1,7 +1,8 @@
 from decimal import Decimal
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -9,6 +10,7 @@ from ..inventory.models import ReserveRequest
 from ..inventory.service import StockError, reserve
 from ..kernel.idempotency import find_existing, record
 from ..kernel.numbering import next_document_number
+from ..kernel.query import csv_download, page_bounds
 from ..kernel.rbac import Role, require_roles
 from ..styles.models import Style
 from .models import (
@@ -21,6 +23,11 @@ from .models import (
     DailyOutputCreate,
     DailyOutputRead,
     IssueFabricRequest,
+    ProductionRoute,
+    ProductionRouteCreate,
+    ProductionRouteRead,
+    ProductionRouteStep,
+    RouteStepRead,
     ReserveFabricRequest,
     SewingDailyOutput,
     SewingOrder,
@@ -31,6 +38,10 @@ from .models import (
     SubcontractReceiveRequest,
     SubcontractRead,
     SubcontractStatus,
+    WipMovement,
+    WipMovementCreate,
+    WipMovementRead,
+    WipStepSummary,
 )
 from .service import (
     ProductionError,
@@ -222,6 +233,12 @@ def create_sewing(
     return _sewing_read(sewing)
 
 
+@router.get("/sewing-orders", response_model=List[SewingOrderRead])
+def list_sewing_orders(session: Session = Depends(get_session)):
+    orders = session.exec(select(SewingOrder).order_by(SewingOrder.id.desc())).all()
+    return [_sewing_read(order) for order in orders]
+
+
 @router.get("/sewing-orders/{sewing_id}", response_model=SewingOrderRead)
 def get_sewing(sewing_id: int, session: Session = Depends(get_session)):
     sewing = session.get(SewingOrder, sewing_id)
@@ -262,6 +279,20 @@ def record_output(
     session.commit()
     session.refresh(output)
     return output
+
+
+@router.get(
+    "/sewing-orders/{sewing_id}/daily-outputs",
+    response_model=List[DailyOutputRead],
+)
+def list_daily_outputs(sewing_id: int, session: Session = Depends(get_session)):
+    if session.get(SewingOrder, sewing_id) is None:
+        raise HTTPException(status_code=404, detail="Sewing order not found")
+    return session.exec(
+        select(SewingDailyOutput)
+        .where(SewingDailyOutput.sewing_order_id == sewing_id)
+        .order_by(SewingDailyOutput.output_date.desc(), SewingDailyOutput.id.desc())
+    ).all()
 
 
 # --------------------------------------------------------------------------- #
@@ -308,6 +339,14 @@ def create_subcontract(
     return _sub_read(order)
 
 
+@router.get("/subcontract-orders", response_model=List[SubcontractRead])
+def list_subcontracts(session: Session = Depends(get_session)):
+    orders = session.exec(
+        select(SubcontractOrder).order_by(SubcontractOrder.id.desc())
+    ).all()
+    return [_sub_read(order) for order in orders]
+
+
 @router.get("/subcontract-orders/{sub_id}", response_model=SubcontractRead)
 def get_subcontract(sub_id: int, session: Session = Depends(get_session)):
     order = session.get(SubcontractOrder, sub_id)
@@ -334,3 +373,199 @@ def receive_sub(
     session.commit()
     session.refresh(order)
     return _sub_read(order)
+
+
+# --------------------------------------------------------------------------- #
+# Production routing and WIP tracking
+# --------------------------------------------------------------------------- #
+def _route_read(session: Session, route: ProductionRoute) -> ProductionRouteRead:
+    steps = session.exec(
+        select(ProductionRouteStep)
+        .where(ProductionRouteStep.route_id == route.id)
+        .order_by(ProductionRouteStep.sequence)
+    ).all()
+    return ProductionRouteRead(
+        id=route.id,
+        route_number=route.route_number,
+        style_id=route.style_id,
+        name=route.name,
+        version_no=route.version_no,
+        active=route.active,
+        steps=[RouteStepRead.model_validate(step) for step in steps],
+    )
+
+
+@router.post("/routes", response_model=ProductionRouteRead, status_code=201)
+def create_route(
+    payload: ProductionRouteCreate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_roles(Role.planner)),
+):
+    if session.get(Style, payload.style_id) is None:
+        raise HTTPException(status_code=404, detail="Style not found")
+    if not payload.steps:
+        raise HTTPException(status_code=422, detail="A route needs at least one step")
+    sequences = [step.sequence for step in payload.steps]
+    if any(sequence < 1 for sequence in sequences) or len(set(sequences)) != len(sequences):
+        raise HTTPException(status_code=422, detail="Step sequences must be positive and unique")
+    version = session.exec(
+        select(func.coalesce(func.max(ProductionRoute.version_no), 0)).where(
+            ProductionRoute.style_id == payload.style_id
+        )
+    ).one() + 1
+    for current in session.exec(
+        select(ProductionRoute).where(
+            ProductionRoute.style_id == payload.style_id,
+            ProductionRoute.active == True,  # noqa: E712
+        )
+    ).all():
+        current.active = False
+        session.add(current)
+    route = ProductionRoute(
+        route_number=next_document_number(session, "PRODUCTION_ROUTE", "RT"),
+        style_id=payload.style_id,
+        name=payload.name,
+        version_no=version,
+        active=True,
+    )
+    session.add(route)
+    session.flush()
+    for step in sorted(payload.steps, key=lambda item: item.sequence):
+        session.add(ProductionRouteStep(route_id=route.id, **step.model_dump()))
+    session.commit()
+    session.refresh(route)
+    return _route_read(session, route)
+
+
+@router.get("/routes", response_model=List[ProductionRouteRead])
+def list_routes(
+    style_id: Optional[int] = None,
+    active: Optional[bool] = None,
+    offset: int = 0,
+    limit: int = 100,
+    session: Session = Depends(get_session),
+):
+    offset, limit = page_bounds(offset, limit)
+    stmt = select(ProductionRoute).order_by(ProductionRoute.id.desc())
+    if style_id is not None:
+        stmt = stmt.where(ProductionRoute.style_id == style_id)
+    if active is not None:
+        stmt = stmt.where(ProductionRoute.active == active)
+    return [_route_read(session, route) for route in session.exec(stmt.offset(offset).limit(limit)).all()]
+
+
+def _step_balance(session: Session, sewing_order_id: int, route_step_id: int) -> tuple[int, int, int, int]:
+    movements = session.exec(
+        select(WipMovement).where(
+            WipMovement.sewing_order_id == sewing_order_id,
+            WipMovement.route_step_id == route_step_id,
+        )
+    ).all()
+    quantity_in = sum(movement.quantity_in for movement in movements)
+    quantity_out = sum(movement.quantity_out for movement in movements)
+    rejected = sum(movement.rejected_qty for movement in movements)
+    return quantity_in, quantity_out, rejected, quantity_in - quantity_out - rejected
+
+
+@router.post(
+    "/sewing-orders/{sewing_id}/wip",
+    response_model=WipMovementRead,
+    status_code=201,
+)
+def record_wip(
+    sewing_id: int,
+    payload: WipMovementCreate,
+    session: Session = Depends(get_session),
+    actor: str = Depends(require_roles(Role.sewing_supervisor, Role.planner)),
+):
+    sewing = session.get(SewingOrder, sewing_id)
+    if sewing is None:
+        raise HTTPException(status_code=404, detail="Sewing order not found")
+    step = session.get(ProductionRouteStep, payload.route_step_id)
+    if step is None:
+        raise HTTPException(status_code=404, detail="Route step not found")
+    route = session.get(ProductionRoute, step.route_id)
+    if route is None or route.style_id != sewing.style_id:
+        raise HTTPException(status_code=422, detail="Route step does not belong to the sewing order style")
+    if min(payload.quantity_in, payload.quantity_out, payload.rejected_qty) < 0:
+        raise HTTPException(status_code=422, detail="WIP quantities cannot be negative")
+    if payload.quantity_in + payload.quantity_out + payload.rejected_qty <= 0:
+        raise HTTPException(status_code=422, detail="At least one WIP quantity is required")
+    _, _, _, current = _step_balance(session, sewing_id, step.id)
+    if payload.quantity_out + payload.rejected_qty > current + payload.quantity_in:
+        raise HTTPException(status_code=422, detail=f"Step has only {current} units in WIP")
+    movement = WipMovement(
+        movement_number=next_document_number(session, "WIP_MOVEMENT", "WIP"),
+        sewing_order_id=sewing_id,
+        route_step_id=step.id,
+        quantity_in=payload.quantity_in,
+        quantity_out=payload.quantity_out,
+        rejected_qty=payload.rejected_qty,
+        recorded_by=actor,
+        note=payload.note,
+    )
+    session.add(movement)
+    session.commit()
+    session.refresh(movement)
+    return movement
+
+
+@router.get("/sewing-orders/{sewing_id}/wip", response_model=List[WipStepSummary])
+def wip_summary(sewing_id: int, session: Session = Depends(get_session)):
+    sewing = session.get(SewingOrder, sewing_id)
+    if sewing is None:
+        raise HTTPException(status_code=404, detail="Sewing order not found")
+    route = session.exec(
+        select(ProductionRoute).where(
+            ProductionRoute.style_id == sewing.style_id,
+            ProductionRoute.active == True,  # noqa: E712
+        )
+    ).first()
+    if route is None:
+        return []
+    steps = session.exec(
+        select(ProductionRouteStep)
+        .where(ProductionRouteStep.route_id == route.id)
+        .order_by(ProductionRouteStep.sequence)
+    ).all()
+    output = []
+    for step in steps:
+        quantity_in, quantity_out, rejected, wip = _step_balance(session, sewing_id, step.id)
+        output.append(WipStepSummary(
+            route_step_id=step.id,
+            sequence=step.sequence,
+            operation=step.operation,
+            work_center=step.work_center,
+            quantity_in=quantity_in,
+            quantity_out=quantity_out,
+            rejected_qty=rejected,
+            wip_qty=wip,
+        ))
+    return output
+
+
+@router.get("/wip/export")
+def export_wip(session: Session = Depends(get_session)):
+    movements = session.exec(select(WipMovement).order_by(WipMovement.id.desc())).all()
+    return csv_download(
+        "production-wip.csv",
+        [
+            ("number", "Movement"), ("sewing", "Sewing Order ID"),
+            ("step", "Route Step ID"), ("in", "Quantity In"),
+            ("out", "Quantity Out"), ("rejected", "Rejected"),
+            ("recorded", "Recorded At"), ("actor", "Recorded By"),
+        ],
+        [
+            {
+                "number": movement.movement_number,
+                "sewing": movement.sewing_order_id,
+                "step": movement.route_step_id,
+                "in": movement.quantity_in,
+                "out": movement.quantity_out,
+                "rejected": movement.rejected_qty,
+                "recorded": movement.recorded_at,
+                "actor": movement.recorded_by,
+            }
+            for movement in movements
+        ],
+    )

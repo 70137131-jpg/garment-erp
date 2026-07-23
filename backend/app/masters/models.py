@@ -21,6 +21,11 @@ class MaterialType(str, Enum):
     service = "service"
 
 
+class ValuationMethod(str, Enum):
+    weighted_average = "weighted_average"
+    fifo = "fifo"
+
+
 # --------------------------------------------------------------------------- #
 # 1.4 Colour library
 # --------------------------------------------------------------------------- #
@@ -44,6 +49,14 @@ class ColourRead(ColourBase):
     id: int
 
 
+class ColourUpdate(SQLModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    pantone: Optional[str] = None
+    hex: Optional[str] = None
+    active: Optional[bool] = None
+
+
 # --------------------------------------------------------------------------- #
 # 1.5 Season and calendar structure
 # --------------------------------------------------------------------------- #
@@ -65,6 +78,14 @@ class SeasonCreate(SeasonBase):
 
 class SeasonRead(SeasonBase):
     id: int
+
+
+class SeasonUpdate(SQLModel):
+    code: Optional[str] = None
+    name: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    active: Optional[bool] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -116,6 +137,13 @@ class SizeRangeRead(SizeRangeBase):
     sizes: List[SizeItemRead] = []
 
 
+class SizeRangeUpdate(SQLModel):
+    # Size labels and ordering are immutable once created because downstream
+    # BOM and order cells use them as business keys.
+    name: Optional[str] = None
+    active: Optional[bool] = None
+
+
 # --------------------------------------------------------------------------- #
 # 1.1 Customer management (auto-numbered code)
 # --------------------------------------------------------------------------- #
@@ -140,6 +168,15 @@ class CustomerCreate(CustomerBase):
 class CustomerRead(CustomerBase):
     id: int
     code: str
+
+
+class CustomerUpdate(SQLModel):
+    name: Optional[str] = None
+    currency: Optional[str] = None
+    payment_terms: Optional[str] = None
+    credit_limit: Optional[Decimal] = None
+    billing_address: Optional[str] = None
+    active: Optional[bool] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -182,6 +219,16 @@ class SupplierRead(SupplierBase):
     material_types: List[MaterialType] = []
 
 
+class SupplierUpdate(SQLModel):
+    name: Optional[str] = None
+    currency: Optional[str] = None
+    payment_terms: Optional[str] = None
+    lead_time_days: Optional[int] = None
+    restricted_substance_certified: Optional[bool] = None
+    active: Optional[bool] = None
+    material_types: Optional[List[MaterialType]] = None
+
+
 # --------------------------------------------------------------------------- #
 # 1.3 Material master (dual UoM: buy by roll, store/issue by metre)
 # --------------------------------------------------------------------------- #
@@ -200,6 +247,7 @@ class MaterialBase(SQLModel):
     lot_tracked: bool = False
     lead_time_days: int = 0
     min_order_qty: Decimal = quantity_field(default=Decimal("0"))
+    valuation_method: ValuationMethod = ValuationMethod.weighted_average
 
     # Fabric-only descriptive attributes (null for trims/thread/etc.).
     composition: Optional[str] = None
@@ -225,6 +273,7 @@ class MaterialUpdate(SQLModel):
     lot_tracked: Optional[bool] = None
     lead_time_days: Optional[int] = None
     min_order_qty: Optional[Decimal] = None
+    valuation_method: Optional[ValuationMethod] = None
     composition: Optional[str] = None
     construction: Optional[str] = None
     weave: Optional[str] = None

@@ -20,8 +20,10 @@ def init_db() -> None:
     table is registered on the metadata before create_all runs.
     """
     from . import models  # noqa: F401  (registers all tables)
+    from .kernel.immutability import install_immutable_record_guards
 
     SQLModel.metadata.create_all(engine)
+    install_immutable_record_guards(engine)
 
 
 async def get_session():

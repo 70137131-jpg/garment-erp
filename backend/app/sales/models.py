@@ -8,14 +8,14 @@ so demand and fulfilment are queryable per size.
     SalesOrder → SalesOrderLine (style × colour) → SalesOrderSizeCell (per size)
 """
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import List, Optional
 
 from sqlmodel import Field, Relationship, SQLModel
 
-from ..kernel.audit import TimestampMixin
+from ..kernel.audit import TimestampMixin, utcnow
 from ..kernel.types import money_field, quantity_field
 
 
@@ -23,6 +23,7 @@ class SalesOrderStatus(str, Enum):
     draft = "draft"
     confirmed = "confirmed"
     in_production = "in_production"
+    partially_shipped = "partially_shipped"
     shipped = "shipped"
     closed = "closed"
     cancelled = "cancelled"
@@ -98,6 +99,38 @@ class SalesOrderSizeCell(SQLModel, table=True):
     line: Optional[SalesOrderLine] = Relationship(back_populates="cells")
 
 
+class ShipmentStatus(str, Enum):
+    dispatched = "dispatched"
+    cancelled = "cancelled"
+
+
+class Shipment(TimestampMixin, table=True):
+    """An immutable dispatch document.  An order can have many shipments."""
+
+    __tablename__ = "shipment"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    shipment_number: str = Field(index=True, unique=True)
+    sales_order_id: int = Field(foreign_key="sales_order.id", index=True)
+    shipment_date: Optional[date] = None
+    shipping_reference: Optional[str] = Field(default=None, index=True)
+    destination: Optional[str] = None
+    notes: Optional[str] = None
+    status: ShipmentStatus = Field(default=ShipmentStatus.dispatched, index=True)
+    cost_of_goods: Decimal = money_field(default=Decimal("0"))
+
+
+class ShipmentLine(SQLModel, table=True):
+    __tablename__ = "shipment_line"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    shipment_id: int = Field(foreign_key="shipment.id", index=True)
+    sales_order_line_id: int = Field(foreign_key="sales_order_line.id", index=True)
+    sales_order_size_cell_id: int = Field(foreign_key="sales_order_size_cell.id", index=True)
+    quantity: int = 0
+    carton_count: int = 0
+
+
 # --------------------------------------------------------------------------- #
 # API payloads
 # --------------------------------------------------------------------------- #
@@ -121,6 +154,7 @@ class SalesOrderCreate(SalesOrderBase):
 
 
 class SizeCellRead(SQLModel):
+    id: int
     size_label: str
     position: int
     ordered_qty: int
@@ -146,5 +180,128 @@ class SalesOrderRead(SalesOrderBase):
     order_number: str
     status: SalesOrderStatus
     total_quantity: int
+    total_shipped_quantity: int
     total_value: Decimal
     lines: List[SalesOrderLineRead]
+
+
+class SalesOrderRevision(SQLModel, table=True):
+    __tablename__ = "sales_order_revision"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    sales_order_id: int = Field(foreign_key="sales_order.id", index=True)
+    revision_no: int
+    action: str = Field(index=True)
+    reason: str
+    snapshot_json: str
+    created_at: datetime = Field(default_factory=utcnow, nullable=False)
+    created_by: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+# Material planning snapshot
+# --------------------------------------------------------------------------- #
+class SalesOrderMaterialRequirement(SQLModel, table=True):
+    """The explodable, auditable material plan for one sales order.
+
+    Rows are regenerated when an order is confirmed.  Persisting the result is
+    intentional: procurement must be able to see the exact shortage that led to
+    a requisition even if stock changes later in the day.
+    """
+
+    __tablename__ = "sales_order_material_requirement"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    sales_order_id: int = Field(foreign_key="sales_order.id", index=True)
+    material_id: int = Field(foreign_key="material.id", index=True)
+    required_qty: Decimal = quantity_field(default=Decimal("0"))
+    available_qty: Decimal = quantity_field(default=Decimal("0"))
+    shortage_qty: Decimal = quantity_field(default=Decimal("0"))
+    generated_at: datetime = Field(default_factory=utcnow, nullable=False)
+
+
+class SalesOrderRevisionRead(SQLModel):
+    id: int
+    sales_order_id: int
+    revision_no: int
+    action: str
+    reason: str
+    snapshot_json: str
+    created_at: datetime
+    created_by: Optional[str]
+
+
+class SalesOrderAmendRequest(SQLModel):
+    customer_po_number: Optional[str] = None
+    order_date: Optional[date] = None
+    incoterms: Optional[str] = None
+    payment_terms: Optional[str] = None
+    notes: Optional[str] = None
+    lines: Optional[List[SalesOrderLineInput]] = None
+    reason: str
+
+
+class SalesOrderCancelRequest(SQLModel):
+    reason: str
+
+
+class SalesOrderCloseRequest(SQLModel):
+    reason: str
+
+
+class ShipmentLineInput(SQLModel):
+    sales_order_size_cell_id: int
+    quantity: int
+    carton_count: int = 0
+
+
+class ShipmentCreate(SQLModel):
+    shipment_date: Optional[date] = None
+    shipping_reference: Optional[str] = None
+    destination: Optional[str] = None
+    notes: Optional[str] = None
+    # Omitted/empty preserves the former full-shipment API behaviour.
+    lines: List[ShipmentLineInput] = []
+
+
+class ShipmentLineRead(SQLModel):
+    id: int
+    sales_order_line_id: int
+    sales_order_size_cell_id: int
+    size_label: str
+    quantity: int
+    carton_count: int
+
+
+class ShipmentRead(SQLModel):
+    id: int
+    shipment_number: str
+    sales_order_id: int
+    shipment_date: Optional[date]
+    shipping_reference: Optional[str]
+    destination: Optional[str]
+    notes: Optional[str]
+    status: ShipmentStatus
+    cost_of_goods: Decimal
+    total_quantity: int
+    total_cartons: int
+    lines: List[ShipmentLineRead]
+
+
+class CommercialCheckRead(SQLModel):
+    eligible: bool
+    order_value: Decimal
+    credit_limit: Decimal
+    current_exposure: Decimal
+    projected_exposure: Decimal
+    messages: List[str] = []
+
+
+class MaterialRequirementRead(SQLModel):
+    id: int
+    sales_order_id: int
+    material_id: int
+    required_qty: Decimal
+    available_qty: Decimal
+    shortage_qty: Decimal
+    generated_at: datetime

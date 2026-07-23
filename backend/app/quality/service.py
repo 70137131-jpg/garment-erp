@@ -90,6 +90,8 @@ def inspect_roll(
             FourPointDefect(
                 inspection_id=inspection.id,
                 description=d.description,
+                defect_code=d.defect_code,
+                category=d.category,
                 penalty_points=d.penalty_points,
                 position_m=d.position_m,
             )

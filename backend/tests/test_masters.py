@@ -102,3 +102,48 @@ def test_material_filter_by_type(client):
     r = client.get("/masters/materials", params={"material_type": "fabric"})
     names = [m["name"] for m in r.json()]
     assert names == ["Fab A"]
+
+
+def test_master_records_can_be_edited_and_deactivated(client):
+    colour = client.post("/masters/colours", json={"code": "NAVY", "name": "Navy"}).json()
+    updated = client.patch(
+        f"/masters/colours/{colour['id']}",
+        json={"name": "Deep Navy", "active": False},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["name"] == "Deep Navy"
+    assert updated.json()["active"] is False
+
+    customer = client.post("/masters/customers", json={"name": "ACME"}).json()
+    updated = client.patch(
+        f"/masters/customers/{customer['id']}",
+        json={"payment_terms": "Net 30", "credit_limit": "5000", "active": False},
+    )
+    assert updated.json()["payment_terms"] == "Net 30"
+    assert Decimal(updated.json()["credit_limit"]) == Decimal("5000")
+    assert updated.json()["active"] is False
+
+
+def test_season_and_supplier_maintenance(client):
+    season = client.post(
+        "/masters/seasons",
+        json={"code": "SS27", "name": "Spring Summer 2027"},
+    ).json()
+    updated = client.patch(
+        f"/masters/seasons/{season['id']}",
+        json={"start_date": "2027-01-01", "end_date": "2027-06-30"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["end_date"] == "2027-06-30"
+
+    supplier = client.post(
+        "/masters/suppliers",
+        json={"name": "Mill", "material_types": ["fabric"]},
+    ).json()
+    updated = client.patch(
+        f"/masters/suppliers/{supplier['id']}",
+        json={"lead_time_days": 21, "material_types": ["fabric", "thread"]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["lead_time_days"] == 21
+    assert set(updated.json()["material_types"]) == {"fabric", "thread"}

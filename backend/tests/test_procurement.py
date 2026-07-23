@@ -72,6 +72,10 @@ def test_goods_receipt_creates_rolls_moves_stock_updates_po(client):
     # Events fired with the received value (250 * 4.00).
     assert len(gr_events) == 1 and gr_events[0].total_value == Decimal("1000.00")
     assert len(ap_events) == 1 and ap_events[0].amount == Decimal("1000.00")
+    history = client.get("/procurement/goods-receipts").json()
+    assert len(history) == 1
+    assert history[0]["id"] == body["id"]
+    assert len(history[0]["rolls"]) == 2
     clear_subscribers()
 
 
@@ -132,6 +136,8 @@ def test_four_point_pass_makes_roll_available(client):
     body = r.json()
     assert body["result"] == "passed"
     assert body["roll_status"] == "available"
+    history = client.get("/quality/four-point-inspections").json()
+    assert history[0]["id"] == body["id"]
 
 
 def test_four_point_fail_quarantines_roll(client):

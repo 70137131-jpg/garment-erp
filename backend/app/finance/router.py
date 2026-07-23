@@ -1,21 +1,29 @@
+from datetime import date
 from decimal import Decimal
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from ..db import get_session
 from ..kernel.rbac import Role, require_roles
+from ..kernel.query import csv_download, page_bounds
 from ..kernel.types import quantize_money
 from .models import (
     Account,
     AccountCreate,
     AccountRead,
+    AgingBucketRead,
+    AgingReportRead,
     APBill,
     APBillRead,
     ARInvoice,
     ARInvoiceRead,
+    BalanceSheetRead,
+    CashFlowRead,
+    GeneralLedgerLineRead,
     JournalEntry,
     JournalEntryCreate,
     JournalEntryRead,
@@ -26,14 +34,18 @@ from .models import (
     ProfitAndLossRead,
     SettleRequest,
     SettlementStatus,
+    TrialBalanceRead,
 )
 from .service import (
     FinanceError,
     account_by_code,
+    balance_sheet,
+    cash_flow,
     post_journal,
     profit_and_loss,
     reverse_journal,
     seed_chart_of_accounts,
+    trial_balance,
 )
 
 router = APIRouter(prefix="/finance", tags=["finance"])
@@ -72,6 +84,160 @@ def create_account(
 @router.get("/accounts", response_model=List[AccountRead])
 def list_accounts(session: Session = Depends(get_session)):
     return session.exec(select(Account).order_by(Account.code)).all()
+
+
+# --------------------------------------------------------------------------- #
+# General ledger inquiry and statutory-style reports
+# --------------------------------------------------------------------------- #
+@router.get("/general-ledger", response_model=List[GeneralLedgerLineRead])
+def general_ledger(
+    account_id: Optional[int] = None,
+    account_code: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    q: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 200,
+    session: Session = Depends(get_session),
+):
+    offset, limit = page_bounds(offset, limit)
+    stmt = (
+        select(JournalLine, JournalEntry, Account)
+        .join(JournalEntry, JournalEntry.id == JournalLine.journal_entry_id)
+        .join(Account, Account.id == JournalLine.account_id)
+        .where(JournalEntry.status == JournalStatus.posted)
+    )
+    if account_id is not None:
+        stmt = stmt.where(Account.id == account_id)
+    if account_code is not None:
+        stmt = stmt.where(Account.code == account_code)
+    if date_from is not None:
+        stmt = stmt.where(or_(JournalEntry.entry_date >= date_from, JournalEntry.entry_date.is_(None)))
+    if date_to is not None:
+        stmt = stmt.where(or_(JournalEntry.entry_date <= date_to, JournalEntry.entry_date.is_(None)))
+    if q:
+        pattern = f"%{q.strip().lower()}%"
+        stmt = stmt.where(
+            func.lower(JournalEntry.entry_number).like(pattern)
+            | func.lower(func.coalesce(JournalEntry.memo, "")).like(pattern)
+            | func.lower(func.coalesce(JournalLine.description, "")).like(pattern)
+        )
+    rows = session.exec(
+        stmt.order_by(JournalEntry.entry_date, JournalEntry.id, JournalLine.id)
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    running: dict[int, Decimal] = {}
+    output = []
+    for line, entry, account in rows:
+        change = line.debit - line.credit
+        running[account.id] = quantize_money(running.get(account.id, Decimal("0")) + change)
+        output.append(GeneralLedgerLineRead(
+            journal_id=entry.id,
+            entry_number=entry.entry_number,
+            entry_date=entry.entry_date,
+            account_id=account.id,
+            account_code=account.code,
+            account_name=account.name,
+            description=line.description or entry.memo,
+            reference_type=entry.reference_type,
+            reference_id=entry.reference_id,
+            debit=line.debit,
+            credit=line.credit,
+            running_balance=running[account.id],
+        ))
+    return output
+
+
+@router.get("/reports/trial-balance", response_model=TrialBalanceRead)
+def trial_balance_report(
+    as_of: Optional[date] = None,
+    session: Session = Depends(get_session),
+):
+    return trial_balance(session, as_of or date.today())
+
+
+@router.get("/reports/balance-sheet", response_model=BalanceSheetRead)
+def balance_sheet_report(
+    as_of: Optional[date] = None,
+    session: Session = Depends(get_session),
+):
+    return balance_sheet(session, as_of or date.today())
+
+
+@router.get("/reports/cash-flow", response_model=CashFlowRead)
+def cash_flow_report(
+    date_from: date,
+    date_to: date,
+    session: Session = Depends(get_session),
+):
+    try:
+        return cash_flow(session, date_from, date_to)
+    except FinanceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _aging(records, *, party_field: str, date_field: str, as_of: date, ledger: str) -> AgingReportRead:
+    parties: dict[int, dict[str, Decimal]] = {}
+    for record in records:
+        outstanding = quantize_money(record.amount - record.settled_amount)
+        if outstanding <= 0:
+            continue
+        party_id = getattr(record, party_field)
+        buckets = parties.setdefault(party_id, {
+            "current": Decimal("0"), "days_1_30": Decimal("0"),
+            "days_31_60": Decimal("0"), "days_61_90": Decimal("0"),
+            "over_90": Decimal("0"),
+        })
+        due_date = getattr(record, "due_date", None) or getattr(record, date_field, None) or record.created_at.date()
+        overdue_days = (as_of - due_date).days
+        key = "current" if overdue_days <= 0 else "days_1_30" if overdue_days <= 30 else "days_31_60" if overdue_days <= 60 else "days_61_90" if overdue_days <= 90 else "over_90"
+        buckets[key] += outstanding
+    output = []
+    for party_id, buckets in parties.items():
+        total = quantize_money(sum(buckets.values(), Decimal("0")))
+        output.append(AgingBucketRead(party_id=party_id, total=total, **buckets))
+    return AgingReportRead(
+        as_of=as_of,
+        ledger=ledger,
+        total=quantize_money(sum((row.total for row in output), Decimal("0"))),
+        parties=output,
+    )
+
+
+@router.get("/reports/ar-aging", response_model=AgingReportRead)
+def ar_aging(as_of: Optional[date] = None, session: Session = Depends(get_session)):
+    return _aging(
+        session.exec(select(ARInvoice).order_by(ARInvoice.customer_id)).all(),
+        party_field="customer_id",
+        date_field="invoice_date",
+        as_of=as_of or date.today(),
+        ledger="AR",
+    )
+
+
+@router.get("/reports/ap-aging", response_model=AgingReportRead)
+def ap_aging(as_of: Optional[date] = None, session: Session = Depends(get_session)):
+    return _aging(
+        session.exec(select(APBill).order_by(APBill.supplier_id)).all(),
+        party_field="supplier_id",
+        date_field="bill_date",
+        as_of=as_of or date.today(),
+        ledger="AP",
+    )
+
+
+@router.get("/reports/trial-balance/export")
+def export_trial_balance(as_of: Optional[date] = None, session: Session = Depends(get_session)):
+    report = trial_balance(session, as_of or date.today())
+    return csv_download(
+        "trial-balance.csv",
+        [
+            ("account_code", "Account Code"), ("account_name", "Account"),
+            ("account_type", "Type"), ("debit", "Debit"), ("credit", "Credit"),
+        ],
+        report["lines"],
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -133,6 +299,14 @@ def create_journal(
     return _journal_read(session, entry)
 
 
+@router.get("/journal-entries", response_model=List[JournalEntryRead])
+def list_journals(session: Session = Depends(get_session)):
+    entries = session.exec(
+        select(JournalEntry).order_by(JournalEntry.id.desc())
+    ).all()
+    return [_journal_read(session, entry) for entry in entries]
+
+
 @router.get("/journal-entries/{entry_id}", response_model=JournalEntryRead)
 def get_journal(entry_id: int, session: Session = Depends(get_session)):
     entry = session.get(JournalEntry, entry_id)
@@ -176,7 +350,7 @@ def list_ar(session: Session = Depends(get_session)):
     return [
         ARInvoiceRead(
             id=i.id, invoice_number=i.invoice_number, customer_id=i.customer_id,
-            sales_order_id=i.sales_order_id, amount=i.amount, settled_amount=i.settled_amount,
+            sales_order_id=i.sales_order_id, shipment_id=i.shipment_id, amount=i.amount, settled_amount=i.settled_amount,
             outstanding=quantize_money(i.amount - i.settled_amount), status=i.status,
         )
         for i in session.exec(select(ARInvoice).order_by(ARInvoice.id)).all()
@@ -217,7 +391,7 @@ def settle_ar(
     session.refresh(invoice)
     return ARInvoiceRead(
         id=invoice.id, invoice_number=invoice.invoice_number, customer_id=invoice.customer_id,
-        sales_order_id=invoice.sales_order_id, amount=invoice.amount,
+        sales_order_id=invoice.sales_order_id, shipment_id=invoice.shipment_id, amount=invoice.amount,
         settled_amount=invoice.settled_amount,
         outstanding=quantize_money(invoice.amount - invoice.settled_amount), status=invoice.status,
     )

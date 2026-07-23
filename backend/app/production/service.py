@@ -181,7 +181,7 @@ def issue_fabric(
                 Reservation.reference_type == "cut_order",
                 Reservation.reference_id == cut_order.id,
                 Reservation.status == ReservationStatus.active,
-            )
+            ).order_by(Reservation.roll_id).with_for_update()
         ).all()
         if not reservations:
             raise ProductionError(
@@ -189,9 +189,20 @@ def issue_fabric(
             )
         pairs = [(r.roll_id, r.reserved_qty) for r in reservations]
 
+    # Acquire every physical roll in one deterministic order before checking
+    # balances.  This prevents two cutting users from both issuing the same
+    # metres and avoids lock-order deadlocks in PostgreSQL.
+    roll_ids = sorted({roll_id for roll_id, _ in pairs})
+    locked_rolls = {
+        roll.id: roll
+        for roll in session.exec(
+            select(Roll).where(Roll.id.in_(roll_ids)).order_by(Roll.id).with_for_update()
+        ).all()
+    }
+
     issued_total = Decimal("0")
     for roll_id, qty in pairs:
-        roll = session.get(Roll, roll_id)
+        roll = locked_rolls.get(roll_id)
         if roll is None:
             raise ProductionError(f"Roll {roll_id} not found")
         if roll.material_id != cut_order.fabric_material_id:
@@ -210,7 +221,7 @@ def issue_fabric(
                 Reservation.reference_type == "cut_order",
                 Reservation.reference_id == cut_order.id,
                 Reservation.status == ReservationStatus.active,
-            )
+            ).order_by(Reservation.id).with_for_update()
         ).all()
         for res in reservations:
             if remaining_res <= 0:

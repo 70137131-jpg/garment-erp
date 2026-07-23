@@ -7,6 +7,7 @@ from sqlmodel import Session
 
 from .config import settings
 from .costing.router import router as costing_router
+from .documents.router import router as documents_router
 from .db import engine, init_db
 from .finance.posting import register_finance_subscribers
 from .finance.router import router as finance_router
@@ -69,6 +70,7 @@ app.include_router(quality_router, dependencies=[Depends(require_permissions(Per
 app.include_router(production_router, dependencies=[Depends(require_permissions(Permission.production_read))])
 app.include_router(costing_router, dependencies=[Depends(require_permissions(Permission.costing_read))])
 app.include_router(finance_router, dependencies=[Depends(require_permissions(Permission.finance_read))])
+app.include_router(documents_router, dependencies=[Depends(require_permissions(Permission.masters_read))])
 
 
 @app.get("/health", tags=["system"])

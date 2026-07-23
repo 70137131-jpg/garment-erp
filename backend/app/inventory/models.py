@@ -17,12 +17,12 @@ Two core structures:
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 
 from sqlmodel import Field, SQLModel
 
 from ..kernel.audit import TimestampMixin, utcnow
-from ..kernel.types import quantity_field
+from ..kernel.types import money_field, quantity_field
 
 
 class MovementType(str, Enum):
@@ -32,6 +32,13 @@ class MovementType(str, Enum):
     adjustment = "adjustment"    # manual correction / opening balance (±)
     transfer_in = "transfer_in"  # inter-location move (+)
     transfer_out = "transfer_out"  # inter-location move (-)
+    supplier_return = "supplier_return"  # returned to supplier (-)
+    customer_return = "customer_return"  # returned by customer (+)
+    split_out = "split_out"        # source roll consumed by split (-)
+    split_in = "split_in"          # child roll created by split (+)
+    join_out = "join_out"          # source roll consumed by join (-)
+    join_in = "join_in"            # joined roll created (+)
+    cycle_count = "cycle_count"    # counted-vs-system variance (+/-)
 
 
 class RollStatus(str, Enum):
@@ -66,6 +73,8 @@ class StockLedgerEntry(SQLModel, table=True):
     # Signed base-UoM quantity: positive into stock, negative out. Balance is the
     # sum of these — never stored, always derived.
     quantity: Decimal = quantity_field(default=Decimal("0"))
+    unit_cost: Decimal = money_field(default=Decimal("0"))
+    extended_cost: Decimal = money_field(default=Decimal("0"))
     uom: str = "metre"
 
     warehouse: str = "MAIN"
@@ -89,6 +98,8 @@ class StockLedgerEntryRead(SQLModel):
     roll_id: Optional[int]
     movement_type: MovementType
     quantity: Decimal
+    unit_cost: Decimal
+    extended_cost: Decimal
     uom: str
     warehouse: str
     location: Optional[str]
@@ -97,6 +108,32 @@ class StockLedgerEntryRead(SQLModel):
     reference_id: Optional[int]
     created_at: datetime
     note: Optional[str]
+
+
+class InventoryCostLayer(SQLModel, table=True):
+    """Open receipt layer used when a material is valued FIFO."""
+
+    __tablename__ = "inventory_cost_layer"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    receipt_ledger_entry_id: int = Field(foreign_key="stock_ledger_entry.id", index=True)
+    material_id: int = Field(foreign_key="material.id", index=True)
+    roll_id: Optional[int] = Field(default=None, foreign_key="roll.id", index=True)
+    warehouse: str = "MAIN"
+    location: Optional[str] = None
+    received_qty: Decimal = quantity_field(default=Decimal("0"))
+    remaining_qty: Decimal = quantity_field(default=Decimal("0"))
+    unit_cost: Decimal = money_field(default=Decimal("0"))
+    created_at: datetime = Field(default_factory=utcnow, nullable=False)
+
+
+class StockValuationRead(SQLModel):
+    material_id: int
+    warehouse: Optional[str]
+    location: Optional[str]
+    quantity: Decimal
+    value: Decimal
+    unit_cost: Decimal
 
 
 # --------------------------------------------------------------------------- #
@@ -124,6 +161,7 @@ class Roll(RollBase, TimestampMixin, table=True):
     status: RollStatus = Field(default=RollStatus.pending_inspection, index=True)
     supplier_id: Optional[int] = Field(default=None, foreign_key="supplier.id")
     goods_receipt_id: Optional[int] = Field(default=None, index=True)
+    parent_roll_id: Optional[int] = Field(default=None, foreign_key="roll.id", index=True)
     # 4.6 customer restriction: a roll dedicated to one customer is only
     # selectable for that customer's orders.
     restricted_customer_id: Optional[int] = Field(
@@ -137,6 +175,7 @@ class RollRead(RollBase):
     status: RollStatus
     supplier_id: Optional[int]
     goods_receipt_id: Optional[int]
+    parent_roll_id: Optional[int] = None
 
 
 class RollWithBalance(RollRead):
@@ -206,3 +245,136 @@ class ReserveRequest(SQLModel):
     customer_id: Optional[int] = None
     reference_type: Optional[str] = None
     reference_id: Optional[int] = None
+
+
+# --------------------------------------------------------------------------- #
+# Warehouse operations - every physical action has a durable header and lines.
+# --------------------------------------------------------------------------- #
+class WarehouseOperationType(str, Enum):
+    transfer = "transfer"
+    return_to_supplier = "return_to_supplier"
+    customer_return = "customer_return"
+    return_to_stock = "return_to_stock"
+    put_away = "put_away"
+    split_roll = "split_roll"
+    join_rolls = "join_rolls"
+    regrade = "regrade"
+    cycle_count = "cycle_count"
+
+
+class WarehouseOperation(SQLModel, table=True):
+    __tablename__ = "warehouse_operation"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    operation_number: str = Field(index=True, unique=True)
+    operation_type: WarehouseOperationType = Field(index=True)
+    reference: Optional[str] = None
+    reason: Optional[str] = None
+    created_at: datetime = Field(default_factory=utcnow, nullable=False)
+    created_by: Optional[str] = None
+
+
+class WarehouseOperationLine(SQLModel, table=True):
+    __tablename__ = "warehouse_operation_line"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    operation_id: int = Field(foreign_key="warehouse_operation.id", index=True)
+    material_id: int = Field(foreign_key="material.id", index=True)
+    roll_id: Optional[int] = Field(default=None, foreign_key="roll.id", index=True)
+    result_roll_id: Optional[int] = Field(default=None, foreign_key="roll.id")
+    quantity: Decimal = quantity_field(default=Decimal("0"))
+    from_warehouse: Optional[str] = None
+    from_location: Optional[str] = None
+    to_warehouse: Optional[str] = None
+    to_location: Optional[str] = None
+    old_grade: Optional[Grade] = None
+    new_grade: Optional[Grade] = None
+    system_qty: Optional[Decimal] = quantity_field(default=None, nullable=True)
+    counted_qty: Optional[Decimal] = quantity_field(default=None, nullable=True)
+    variance_qty: Optional[Decimal] = quantity_field(default=None, nullable=True)
+
+
+class WarehouseOperationLineRead(SQLModel):
+    material_id: int
+    roll_id: Optional[int]
+    result_roll_id: Optional[int]
+    quantity: Decimal
+    from_warehouse: Optional[str]
+    from_location: Optional[str]
+    to_warehouse: Optional[str]
+    to_location: Optional[str]
+    old_grade: Optional[Grade]
+    new_grade: Optional[Grade]
+    system_qty: Optional[Decimal]
+    counted_qty: Optional[Decimal]
+    variance_qty: Optional[Decimal]
+
+
+class WarehouseOperationRead(SQLModel):
+    id: int
+    operation_number: str
+    operation_type: WarehouseOperationType
+    reference: Optional[str]
+    reason: Optional[str]
+    created_at: datetime
+    created_by: Optional[str]
+    lines: List[WarehouseOperationLineRead] = []
+
+
+class MoveStockRequest(SQLModel):
+    material_id: int
+    quantity: Decimal
+    roll_id: Optional[int] = None
+    from_warehouse: str = "MAIN"
+    from_location: Optional[str] = None
+    to_warehouse: str = "MAIN"
+    to_location: Optional[str] = None
+    reference: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class ReturnStockRequest(SQLModel):
+    material_id: int
+    quantity: Decimal
+    direction: str = "supplier"
+    roll_id: Optional[int] = None
+    warehouse: str = "MAIN"
+    location: Optional[str] = None
+    reference: Optional[str] = None
+    reason: str
+
+
+class SplitPartInput(SQLModel):
+    quantity: Decimal
+    roll_number: Optional[str] = None
+    location: Optional[str] = None
+
+
+class SplitRollRequest(SQLModel):
+    parts: List[SplitPartInput]
+    reason: Optional[str] = None
+
+
+class JoinRollsRequest(SQLModel):
+    roll_ids: List[int]
+    roll_number: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class RegradeRollRequest(SQLModel):
+    grade: Grade
+    reason: str
+
+
+class CycleCountLineInput(SQLModel):
+    material_id: int
+    counted_qty: Decimal
+    roll_id: Optional[int] = None
+    warehouse: str = "MAIN"
+    location: Optional[str] = None
+
+
+class CycleCountRequest(SQLModel):
+    reference: Optional[str] = None
+    reason: Optional[str] = None
+    lines: List[CycleCountLineInput]

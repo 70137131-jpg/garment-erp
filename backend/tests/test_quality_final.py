@@ -41,6 +41,9 @@ def test_inline_dhu_endpoint(client):
     assert r.status_code == 201, r.text
     # DHU = 6/200*100 = 3.0
     assert Decimal(r.json()["dhu"]) == Decimal("3.0000")
+    history = client.get("/quality/inline-inspections").json()
+    assert len(history) == 1
+    assert history[0]["id"] == r.json()["id"]
 
 
 def _confirmed_order(client):
@@ -78,6 +81,8 @@ def test_final_aql_pass_allows_shipment(client):
     )
     assert fi.status_code == 201, fi.text
     assert fi.json()["result"] == "passed"  # 3 <= Ac 5
+    history = client.get("/quality/final-inspections").json()
+    assert history[0]["id"] == fi.json()["id"]
 
     r = client.post(f"/sales-orders/{order['id']}/ship")
     assert r.status_code == 200, r.text
