@@ -1,0 +1,40 @@
+
+Actual costing and variance
+Capture real material consumption value, labour, subcontract costs, rework, freight and overhead. Then show estimated-vs-actual variance per order/style/cost head.
+
+Supplier invoices and matching
+Add supplier invoice entry, PO ↔ GRN ↔ invoice comparison, quantity/rate/tax variance flags, approval rules, and payable posting from the approved supplier invoice—not only automatically from GRN.
+
+Tax and exchange rates
+Store transaction-date exchange rates, tax codes/rates, invoice totals, and base-currency accounting amounts.
+
+Important factory workflow gaps
+Production planning
+Generate work orders from confirmed sales orders; add delivery batches, full cut plans (marker length, ply count, lay plan), finishing/packing progress, line capacity calendars, and a daily/weekly planning board.
+
+Subcontract inventory
+Post material issued to subcontractors, track external WIP, receive finished goods/rejections, and feed subcontract charges into actual costing.
+
+Quality depth
+Add trim/accessory inspections, structured inline defect records and corrective actions, defect catalogue, major/minor AQL defects, rework workflow and quality reports by supplier/style/line.
+
+Master-data completeness
+Add customer delivery addresses, supplier addresses, trim/accessory lot records, supplier/material preferences, and configurable locations.
+
+Finish the new planning flow in the UI
+   The backend now supports material shortages, requisitions, and requisition-to-PO consolidation. Add screens for reviewing shortages, creating requisitions, and converting them into POs.
+
+Production-quality hardening
+PostgreSQL tests for locking, migrations and concurrent reservations.  
+Browser end-to-end tests for every role and key workflow.  
+Audit coverage: ensure all changes record acting user, timestamps and reason.  
+Error handling, permission checks and approval rules across all financial/stock actions.  
+Import/export validation, realistic seed data, and migration/rollback testing.
+If I were sequencing the remaining work, I would do:
+Partial shipment  
+Lock-safe inventory + valuation  
+Actual costing + COGS  
+Supplier invoices + three-way match  
+Production planning  
+Quality/rework  
+UI completion and end-to-end testing
