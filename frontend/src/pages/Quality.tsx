@@ -1,13 +1,16 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
-import { Final, Roll, SalesOrder } from "../api/types";
+import { DefectAnalytics, Final, FourPoint as FourPointRecord, Inline as InlineRecord, LabTest, Material, Roll, SalesOrder } from "../api/types";
+import { useAuthorization } from "../auth/Authorization";
 import { Card, Chip, Drawer, ErrorBox, Field, PageHeader, Spinner, Tabs } from "../components/ui";
 import { useToast } from "../components/Toast";
 import { useAsync } from "../lib/useAsync";
 import { num, qty } from "../lib/format";
 
 export default function Quality() {
-  const [tab, setTab] = useState("fourpoint");
+  const { can } = useAuthorization();
+  const inspector = can("quality_inspector");
+  const [tab, setTab] = useState(inspector ? "fourpoint" : "history");
   return (
     <div>
       <PageHeader
@@ -16,17 +19,21 @@ export default function Quality() {
         subtitle="Four-point inspection gates incoming rolls; inline DHU tracks the line; the AQL final inspection authorises shipment."
       />
       <Tabs
-        tabs={[
+        tabs={[...(inspector ? [
           { key: "fourpoint", label: "Four-Point (Incoming)" },
           { key: "inline", label: "Inline DHU" },
           { key: "final", label: "Final AQL" },
-        ]}
+          { key: "labs", label: "Lab Management" },
+        ] : []), { key: "analytics", label: "Defect Analytics" }, { key: "history", label: "Inspection History" }]}
         active={tab}
         onChange={setTab}
       />
       {tab === "fourpoint" && <FourPoint />}
       {tab === "inline" && <Inline />}
       {tab === "final" && <FinalAql />}
+      {tab === "labs" && <LabManagement />}
+      {tab === "analytics" && <QualityAnalytics />}
+      {tab === "history" && <QualityHistory />}
     </div>
   );
 }
@@ -221,4 +228,83 @@ function FinalAql() {
       </Card>
     </div>
   );
+}
+
+function QualityHistory() {
+  const incoming = useAsync(() => api.get<FourPointRecord[]>("/quality/four-point-inspections"));
+  const inline = useAsync(() => api.get<InlineRecord[]>("/quality/inline-inspections"));
+  const final = useAsync(() => api.get<Final[]>("/quality/final-inspections"));
+  const loading = incoming.loading || inline.loading || final.loading;
+  if (loading) return <Spinner />;
+  return (
+    <div className="stagger">
+      <div className="flex-between"><div className="section-title mt-0">Persisted inspection history</div><a className="btn sm" href="/api/quality/inspections/export" download>Export CSV</a></div>
+      <Card title="Incoming inspections" hint="four-point history">
+        <div className="table-wrap"><table className="tbl">
+          <thead><tr><th>Inspection</th><th>Roll</th><th className="num">Points</th><th className="num">Pts/100yd²</th><th>Result</th></tr></thead>
+          <tbody>{incoming.data?.map((item) => <tr key={item.id}>
+            <td className="code">{item.inspection_number}</td><td className="mono">#{item.roll_id}</td>
+            <td className="num">{item.total_points}</td><td className="num">{qty(item.points_per_100sqyd)}</td><td><Chip status={item.result} /></td>
+          </tr>)}{!incoming.data?.length && <tr><td colSpan={5} className="muted">No incoming inspections.</td></tr>}</tbody>
+        </table></div>
+      </Card>
+      <Card title="Inline inspections" hint="DHU history">
+        <div className="table-wrap"><table className="tbl">
+          <thead><tr><th>Inspection</th><th>Sewing order</th><th className="num">Units</th><th className="num">Defects</th><th className="num">DHU</th></tr></thead>
+          <tbody>{inline.data?.map((item) => <tr key={item.id}>
+            <td className="code">{item.inspection_number}</td><td className="mono">#{item.sewing_order_id}</td>
+            <td className="num">{item.units_checked}</td><td className="num">{item.defects_found}</td><td className="num">{qty(item.dhu)}</td>
+          </tr>)}{!inline.data?.length && <tr><td colSpan={5} className="muted">No inline inspections.</td></tr>}</tbody>
+        </table></div>
+      </Card>
+      <Card title="Final inspections" hint="AQL shipment gates">
+        <div className="table-wrap"><table className="tbl">
+          <thead><tr><th>Inspection</th><th>Sales order</th><th className="num">Lot</th><th className="num">Defects</th><th>Result</th></tr></thead>
+          <tbody>{final.data?.map((item) => <tr key={item.id}>
+            <td className="code">{item.inspection_number}</td><td className="mono">#{item.sales_order_id}</td>
+            <td className="num">{item.lot_size}</td><td className="num">{item.defects_found}</td><td><Chip status={item.result} /></td>
+          </tr>)}{!final.data?.length && <tr><td colSpan={5} className="muted">No final inspections.</td></tr>}</tbody>
+        </table></div>
+      </Card>
+    </div>
+  );
+}
+
+function LabManagement() {
+  const tests = useAsync(() => api.get<LabTest[]>("/quality/lab-tests"));
+  const materials = useAsync(() => api.get<Material[]>("/masters/materials"));
+  const [open, setOpen] = useState(false);
+  const toast = useToast();
+  const materialName = (id: number) => materials.data?.find((material) => material.id === id)?.name ?? `#${id}`;
+  async function complete(test: LabTest, passed: boolean) {
+    try { await api.post(`/quality/lab-tests/${test.id}/complete`, { passed, measured_value: passed ? "Meets specification" : "Outside specification" }); toast.push(`Lab test ${passed ? "passed" : "failed"}`); tests.reload(); }
+    catch (error) { toast.push("Lab result failed", { detail: (error as ApiError).message, bad: true }); }
+  }
+  return <Card title="Laboratory test register" hint="Material compliance and performance testing" actions={<button className="btn primary sm" onClick={() => setOpen(true)}>+ Submit test</button>}>
+    <div className="table-wrap"><table className="tbl"><thead><tr><th>Test</th><th>Material</th><th>Type</th><th>Method</th><th>Result</th><th>Status</th><th></th></tr></thead><tbody>
+      {tests.data?.map((test) => <tr key={test.id}><td className="code">{test.test_number}</td><td>{materialName(test.material_id)}</td><td>{test.test_type}</td><td className="muted">{test.method || "-"}</td><td>{test.measured_value || "-"}</td><td><Chip status={test.status} /></td><td className="right">{test.status === "pending" && <div className="inline-actions"><button className="btn sm" onClick={() => complete(test, true)}>Pass</button><button className="btn danger sm" onClick={() => complete(test, false)}>Fail</button></div>}</td></tr>)}
+      {!tests.data?.length && <tr><td colSpan={7} className="muted">No lab tests submitted.</td></tr>}
+    </tbody></table></div>{open && <LabForm materials={materials.data ?? []} onClose={() => setOpen(false)} onDone={() => { setOpen(false); tests.reload(); }} />}
+  </Card>;
+}
+
+function LabForm({ materials, onClose, onDone }: { materials: Material[]; onClose: () => void; onDone: () => void }) {
+  const [materialId, setMaterialId] = useState(0);
+  const [testType, setTestType] = useState("Colour fastness");
+  const [method, setMethod] = useState("ISO 105");
+  const [specification, setSpecification] = useState("");
+  const [error, setError] = useState("");
+  const toast = useToast();
+  async function save() { try { await api.post("/quality/lab-tests", { material_id: materialId, test_type: testType, method, specification }); toast.push("Lab test submitted"); onDone(); } catch (caught) { const message = (caught as ApiError).message; setError(message); toast.push("Submission failed", { detail: message, bad: true }); } }
+  return <Drawer title="Submit laboratory test" sub="Quality lab register" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={!materialId || !testType.trim()} onClick={save}>Submit</button></>}>
+    {error && <ErrorBox message={error} />}<Field label="Material" required><select className="select" value={materialId} onChange={(event) => setMaterialId(Number(event.target.value))}><option value={0}>Select...</option>{materials.map((material) => <option key={material.id} value={material.id}>{material.code} - {material.name}</option>)}</select></Field>
+    <div className="form-row two"><Field label="Test type"><input className="input" value={testType} onChange={(event) => setTestType(event.target.value)} /></Field><Field label="Method"><input className="input" value={method} onChange={(event) => setMethod(event.target.value)} /></Field></div><Field label="Specification"><textarea className="input" value={specification} onChange={(event) => setSpecification(event.target.value)} /></Field>
+  </Drawer>;
+}
+
+function QualityAnalytics() {
+  const analytics = useAsync(() => api.get<DefectAnalytics[]>("/quality/defect-analytics"));
+  return <Card title="Defect Pareto" hint="Ranked by penalty impact">{analytics.loading ? <Spinner /> : <div className="table-wrap"><table className="tbl"><thead><tr><th>Defect</th><th className="num">Occurrences</th><th className="num">Penalty points</th><th className="num">Share</th></tr></thead><tbody>
+    {analytics.data?.map((row) => <tr key={row.defect_key}><td>{row.defect_key}</td><td className="num">{row.occurrences}</td><td className="num">{row.penalty_points}</td><td className="num">{qty(row.share_pct)}%</td></tr>)}{!analytics.data?.length && <tr><td colSpan={4} className="muted">No classified defects recorded yet.</td></tr>}
+  </tbody></table></div>}</Card>;
 }

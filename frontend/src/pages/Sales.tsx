@@ -2,8 +2,10 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { Colour, Customer, SalesOrder, SizeRange, Style } from "../api/types";
+import { useAuthorization } from "../auth/Authorization";
 import { Card, Chip, Drawer, ErrorBox, Field, PageHeader, Spinner } from "../components/ui";
 import { useToast } from "../components/Toast";
+import { ListToolbar, useListView } from "../components/ListTools";
 import { useAsync } from "../lib/useAsync";
 import { money, num } from "../lib/format";
 
@@ -15,23 +17,26 @@ interface DraftLine {
 }
 
 export default function Sales() {
+  const { can } = useAuthorization();
   const orders = useAsync(() => api.get<SalesOrder[]>("/sales-orders"));
   const [open, setOpen] = useState(false);
+  const view = useListView(orders.data ?? [], (order) => `${order.order_number} ${order.customer_po_number ?? ""} ${order.status}`, (a, b) => a.id - b.id);
   return (
     <div>
       <PageHeader
         eyebrow="Module 2"
         title="Sales Orders"
         subtitle="Demand entered once as a size matrix — every colour × size cell tracked from ordered through confirmed to shipped."
-        actions={<button className="btn primary" onClick={() => setOpen(true)}>+ New order</button>}
+        actions={can("merchandiser") ? <button className="btn primary" onClick={() => setOpen(true)}>+ New order</button> : undefined}
       />
       <Card>
+        <ListToolbar query={view.query} onQuery={view.setQuery} descending={view.descending} onDirection={view.toggleDirection} page={view.page} pages={view.pages} total={view.total} previous={view.previous} next={view.next} exportPath="/sales-orders/export" placeholder="Search order, customer PO, status..." />
         {orders.loading ? <Spinner /> : (
           <div className="table-wrap">
             <table className="tbl">
               <thead><tr><th>Order</th><th>Customer PO</th><th>Status</th><th className="num">Qty</th><th className="num">Value</th><th></th></tr></thead>
               <tbody>
-                {[...(orders.data ?? [])].reverse().map((o) => (
+                {view.rows.map((o) => (
                   <tr key={o.id} className="clickable">
                     <td className="code"><Link to={`/sales/${o.id}`}>{o.order_number}</Link></td>
                     <td className="mono muted">{o.customer_po_number || "—"}</td>
@@ -41,7 +46,7 @@ export default function Sales() {
                     <td className="right"><Link to={`/sales/${o.id}`} className="btn ghost sm">Open →</Link></td>
                   </tr>
                 ))}
-                {!orders.data?.length && <tr><td colSpan={6} className="muted">No sales orders yet.</td></tr>}
+                {!view.rows.length && <tr><td colSpan={6} className="muted">No sales orders match.</td></tr>}
               </tbody>
             </table>
           </div>

@@ -1,311 +1,131 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
-import { Colour, Customer, Material, SizeRange, Supplier } from "../api/types";
+import { Colour, Customer, Material, Season, SizeRange, Supplier } from "../api/types";
+import { useAuthorization } from "../auth/Authorization";
 import { Card, Chip, Drawer, ErrorBox, Field, PageHeader, Spinner, Tabs } from "../components/ui";
 import { useToast } from "../components/Toast";
 import { useAsync } from "../lib/useAsync";
 import { money, qty, titled } from "../lib/format";
 
-const TABS = [
-  { key: "materials", label: "Materials" },
-  { key: "customers", label: "Customers" },
-  { key: "suppliers", label: "Suppliers" },
-  { key: "colours", label: "Colours" },
-  { key: "sizes", label: "Size Ranges" },
-];
+type Kind = "materials" | "customers" | "suppliers" | "colours" | "seasons" | "size-ranges";
+type MasterRecord = Material | Customer | Supplier | Colour | Season | SizeRange;
 
 const MATERIAL_TYPES = ["fabric", "trims", "thread", "labels", "hangtags", "packaging", "chemicals", "consumables", "service"];
+const CONFIG: Record<Kind, { title: string; singular: string; hint: string; roles: string[] }> = {
+  materials: { title: "Material master", singular: "material", hint: "dual UoM — buy by roll, stock by metre", roles: ["procurement", "merchandiser"] },
+  customers: { title: "Customers", singular: "customer", hint: "deactivate, never delete", roles: ["merchandiser"] },
+  suppliers: { title: "Suppliers", singular: "supplier", hint: "approved per material type", roles: ["procurement", "merchandiser"] },
+  colours: { title: "Colour library", singular: "colour", hint: "Pantone and digital swatch", roles: ["merchandiser"] },
+  seasons: { title: "Seasons", singular: "season", hint: "commercial calendar windows", roles: ["merchandiser"] },
+  "size-ranges": { title: "Size ranges", singular: "size range", hint: "labels are immutable after creation", roles: ["merchandiser"] },
+};
 
 export default function Masters() {
-  const [tab, setTab] = useState("materials");
-  return (
-    <div>
-      <PageHeader
-        eyebrow="Module 1"
-        title="Master Data"
-        subtitle="The foundation everything builds on — what things are before any transaction happens."
-      />
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
-      {tab === "materials" && <Materials />}
-      {tab === "customers" && <Customers />}
-      {tab === "suppliers" && <Suppliers />}
-      {tab === "colours" && <Colours />}
-      {tab === "sizes" && <Sizes />}
-    </div>
-  );
+  const [tab, setTab] = useState<Kind>("materials");
+  const tabs = (Object.keys(CONFIG) as Kind[]).map((key) => ({ key, label: CONFIG[key].title }));
+  return <div>
+    <PageHeader eyebrow="Module 1" title="Master Data" subtitle="Maintain the shared commercial and manufacturing definitions used by every transaction." />
+    <Tabs tabs={tabs} active={tab} onChange={(key) => setTab(key as Kind)} />
+    <MasterSection kind={tab} />
+  </div>;
 }
 
-function useCreate<T>(path: string, onDone: () => void) {
+function MasterSection({ kind }: { kind: Kind }) {
+  const config = CONFIG[kind];
+  const { can } = useAuthorization();
+  const editable = can(...config.roles);
+  const records = useAsync(() => api.get<MasterRecord[]>(`/masters/${kind}`), [kind]);
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<MasterRecord | null>(null);
+  return <Card title={config.title} hint={config.hint} actions={editable ? <button className="btn primary sm" onClick={() => setCreating(true)}>+ New {config.singular}</button> : undefined}>
+    {records.loading ? <Spinner /> : <MasterTable kind={kind} records={records.data ?? []} editable={editable} onEdit={setEditing} />}
+    {creating && <MasterDrawer kind={kind} onClose={() => setCreating(false)} onDone={() => { setCreating(false); records.reload(); }} />}
+    {editing && <MasterDrawer kind={kind} item={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); records.reload(); }} />}
+  </Card>;
+}
+
+function Active({ value }: { value: boolean }) {
+  return <Chip tone={value ? "ok" : "neutral"} label={value ? "Active" : "Inactive"} />;
+}
+
+function MasterTable({ kind, records, editable, onEdit }: { kind: Kind; records: MasterRecord[]; editable: boolean; onEdit: (item: MasterRecord) => void }) {
+  if (!records.length) return <div className="empty"><div className="big">No records yet</div></div>;
+  return <div className="table-wrap"><table className="tbl">
+    {kind === "materials" && <><thead><tr><th>Code</th><th>Name</th><th>Type</th><th>UoM</th><th className="num">Conversion</th><th>Status</th><th></th></tr></thead><tbody>{(records as Material[]).map((item) => <tr key={item.id}><td className="code">{item.code}</td><td>{item.name}</td><td>{titled(item.material_type)}</td><td>{item.purchase_uom} → {item.base_uom}</td><td className="num">{qty(item.purchase_to_base_factor)}</td><td><Active value={item.active} /></td><Action editable={editable} onClick={() => onEdit(item)} /></tr>)}</tbody></>}
+    {kind === "customers" && <><thead><tr><th>Code</th><th>Name</th><th>Currency</th><th className="num">Credit limit</th><th>Status</th><th></th></tr></thead><tbody>{(records as Customer[]).map((item) => <tr key={item.id}><td className="code">{item.code}</td><td>{item.name}</td><td className="mono">{item.currency}</td><td className="num">{money(item.credit_limit, item.currency)}</td><td><Active value={item.active} /></td><Action editable={editable} onClick={() => onEdit(item)} /></tr>)}</tbody></>}
+    {kind === "suppliers" && <><thead><tr><th>Code</th><th>Name</th><th>Currency</th><th className="num">Lead time</th><th>Supplies</th><th>Status</th><th></th></tr></thead><tbody>{(records as Supplier[]).map((item) => <tr key={item.id}><td className="code">{item.code}</td><td>{item.name}</td><td className="mono">{item.currency}</td><td className="num">{item.lead_time_days} d</td><td><div className="tag-list">{item.material_types.map((type) => <Chip key={type} tone="neutral" label={titled(type)} />)}</div></td><td><Active value={item.active} /></td><Action editable={editable} onClick={() => onEdit(item)} /></tr>)}</tbody></>}
+    {kind === "colours" && <><thead><tr><th>Code</th><th>Name</th><th>Pantone</th><th>Swatch</th><th>Status</th><th></th></tr></thead><tbody>{(records as Colour[]).map((item) => <tr key={item.id}><td className="code">{item.code}</td><td>{item.name}</td><td>{item.pantone || "—"}</td><td><span className="swatch" style={{ background: item.hex || "#ccc" }} /> {item.hex}</td><td><Active value={item.active} /></td><Action editable={editable} onClick={() => onEdit(item)} /></tr>)}</tbody></>}
+    {kind === "seasons" && <><thead><tr><th>Code</th><th>Name</th><th>Start</th><th>End</th><th>Status</th><th></th></tr></thead><tbody>{(records as Season[]).map((item) => <tr key={item.id}><td className="code">{item.code}</td><td>{item.name}</td><td>{item.start_date || "—"}</td><td>{item.end_date || "—"}</td><td><Active value={item.active} /></td><Action editable={editable} onClick={() => onEdit(item)} /></tr>)}</tbody></>}
+    {kind === "size-ranges" && <><thead><tr><th>Code</th><th>Name</th><th>Sizes</th><th>Status</th><th></th></tr></thead><tbody>{(records as SizeRange[]).map((item) => <tr key={item.id}><td className="code">{item.code}</td><td>{item.name}</td><td><div className="tag-list">{item.sizes.map((size) => <Chip key={size.position} tone="neutral" label={size.label} />)}</div></td><td><Active value={item.active} /></td><Action editable={editable} onClick={() => onEdit(item)} /></tr>)}</tbody></>}
+  </table></div>;
+}
+
+function Action({ editable, onClick }: { editable: boolean; onClick: () => void }) {
+  return <td>{editable && <button className="btn sm" onClick={onClick}>Edit</button>}</td>;
+}
+
+function defaults(kind: Kind): Record<string, any> {
+  if (kind === "materials") return { name: "", material_type: "fabric", base_uom: "metre", purchase_uom: "roll", purchase_to_base_factor: "50", lot_tracked: true, lead_time_days: 0, min_order_qty: "0", valuation_method: "weighted_average", width_cm: "", gsm: "", composition: "", construction: "", weave: "", active: true };
+  if (kind === "customers") return { name: "", currency: "USD", payment_terms: "", credit_limit: "0", billing_address: "", active: true };
+  if (kind === "suppliers") return { name: "", currency: "USD", payment_terms: "", lead_time_days: 0, restricted_substance_certified: false, material_types: ["fabric"], active: true };
+  if (kind === "colours") return { code: "", name: "", pantone: "", hex: "#2b3a7c", active: true };
+  if (kind === "seasons") return { code: "", name: "", start_date: "", end_date: "", active: true };
+  return { code: "", name: "", labels: "S, M, L, XL", active: true };
+}
+
+function MasterDrawer({ kind, item, onClose, onDone }: { kind: Kind; item?: MasterRecord; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
-  const [saving, setSaving] = useState(false);
+  const config = CONFIG[kind];
+  const [form, setForm] = useState<Record<string, any>>(() => {
+    const initial: Record<string, any> = { ...defaults(kind), ...(item ?? {}) };
+    if (kind === "size-ranges" && item) initial.labels = (item as SizeRange).sizes.map((size) => size.label).join(", ");
+    return initial;
+  });
   const [error, setError] = useState<string | null>(null);
-  async function submit(body: unknown, label: string) {
-    setSaving(true);
-    setError(null);
-    try {
-      await api.post<T>(path, body);
-      toast.push(`${label} created`);
-      onDone();
-      return true;
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "Failed";
-      setError(msg);
-      toast.push("Could not save", { detail: msg, bad: true });
-      return false;
-    } finally {
-      setSaving(false);
-    }
+  const [saving, setSaving] = useState(false);
+  const needsCode = kind === "colours" || kind === "seasons" || kind === "size-ranges";
+  const set = (key: string, value: any) => setForm((current) => ({ ...current, [key]: value }));
+
+  function payload() {
+    if (kind === "materials") return item ? pick(form, ["name", "lot_tracked", "lead_time_days", "min_order_qty", "valuation_method", "composition", "construction", "weave", "gsm", "width_cm", "active"]) : pick(form, ["name", "material_type", "base_uom", "purchase_uom", "purchase_to_base_factor", "lot_tracked", "lead_time_days", "min_order_qty", "valuation_method", "composition", "construction", "weave", "gsm", "width_cm", "active"]);
+    if (kind === "customers") return pick(form, ["name", "currency", "payment_terms", "credit_limit", "billing_address", "active"]);
+    if (kind === "suppliers") return pick(form, ["name", "currency", "payment_terms", "lead_time_days", "restricted_substance_certified", "material_types", "active"]);
+    if (kind === "colours") return pick(form, ["code", "name", "pantone", "hex", "active"]);
+    if (kind === "seasons") return pick(form, ["code", "name", "start_date", "end_date", "active"]);
+    if (item) return pick(form, ["name", "active"]);
+    return { code: form.code, name: form.name, active: form.active, sizes: String(form.labels).split(",").map((label, index) => ({ position: index + 1, label: label.trim() })).filter((size) => size.label) };
   }
-  return { submit, saving, error, setError };
+
+  async function save() {
+    setSaving(true); setError(null);
+    try {
+      if (item) await api.patch(`/masters/${kind}/${item.id}`, payload());
+      else await api.post(`/masters/${kind}`, payload());
+      toast.push(`${titled(config.singular)} ${item ? "updated" : "created"}`); onDone();
+    } catch (e) { const message = (e as ApiError).message; setError(message); toast.push("Could not save", { detail: message, bad: true }); }
+    finally { setSaving(false); }
+  }
+
+  return <Drawer title={`${item ? "Edit" : "New"} ${config.singular}`} sub={item ? `Code ${(item as any).code}` : "Master data"} onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={saving || !form.name || (!item && needsCode && !form.code)} onClick={save}>{saving ? "Saving…" : "Save"}</button></>}>
+    {error && <ErrorBox message={error} />}
+    {kind === "materials" && <MaterialFields form={form} set={set} editing={!!item} />}
+    {kind === "customers" && <CustomerFields form={form} set={set} />}
+    {kind === "suppliers" && <SupplierFields form={form} set={set} />}
+    {kind === "colours" && <ColourFields form={form} set={set} />}
+    {kind === "seasons" && <SeasonFields form={form} set={set} />}
+    {kind === "size-ranges" && <SizeFields form={form} set={set} editing={!!item} />}
+    {item && <ActiveField value={form.active} onChange={(value) => set("active", value)} />}
+  </Drawer>;
 }
 
-/* ---------------- Materials ---------------- */
-function Materials() {
-  const { data, loading, reload } = useAsync(() => api.get<Material[]>("/masters/materials"));
-  const [open, setOpen] = useState(false);
-  return (
-    <Card
-      title="Material master"
-      hint="dual UoM — buy by roll, stock by metre"
-      actions={<button className="btn primary sm" onClick={() => setOpen(true)}>+ New material</button>}
-    >
-      {loading ? <Spinner /> : (
-        <div className="table-wrap">
-          <table className="tbl">
-            <thead><tr><th>Code</th><th>Name</th><th>Type</th><th>Base UoM</th><th className="num">Conv.</th><th>Lot</th><th>Width</th></tr></thead>
-            <tbody>
-              {data?.map((m) => (
-                <tr key={m.id}>
-                  <td className="code">{m.code}</td>
-                  <td>{m.name}</td>
-                  <td><Chip tone="neutral" label={titled(m.material_type)} /></td>
-                  <td className="mono">{m.base_uom}</td>
-                  <td className="num">{qty(m.purchase_to_base_factor)}</td>
-                  <td>{m.lot_tracked ? <Chip tone="info" label="Lot" /> : <span className="muted">—</span>}</td>
-                  <td className="num">{m.width_cm ? `${qty(m.width_cm)} cm` : "—"}</td>
-                </tr>
-              ))}
-              {!data?.length && <tr><td colSpan={7} className="muted">No materials yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {open && <MaterialForm onClose={() => setOpen(false)} onDone={() => { setOpen(false); reload(); }} />}
-    </Card>
-  );
+function pick(source: Record<string, any>, keys: string[]) {
+  return Object.fromEntries(keys.map((key) => [key, source[key] === "" ? null : source[key]]));
 }
-
-function MaterialForm({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
-  const { submit, saving, error } = useCreate("/masters/materials", onDone);
-  const [f, setF] = useState({ name: "", material_type: "fabric", base_uom: "metre", purchase_uom: "roll", purchase_to_base_factor: "50", lot_tracked: true, width_cm: "", gsm: "", composition: "" });
-  const set = (k: string, v: any) => setF({ ...f, [k]: v });
-  return (
-    <Drawer title="New material" sub="Module 1.3" onClose={onClose}
-      footer={<>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={saving || !f.name} onClick={() => submit({
-          name: f.name, material_type: f.material_type, base_uom: f.base_uom, purchase_uom: f.purchase_uom,
-          purchase_to_base_factor: f.purchase_to_base_factor, lot_tracked: f.lot_tracked,
-          width_cm: f.width_cm || null, gsm: f.gsm || null, composition: f.composition || null,
-        }, "Material")}>Save material</button>
-      </>}>
-      {error && <ErrorBox message={error} />}
-      <Field label="Name" required><input className="input" value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Single Jersey 180gsm" /></Field>
-      <Field label="Material type" required>
-        <select className="select" value={f.material_type} onChange={(e) => set("material_type", e.target.value)}>
-          {MATERIAL_TYPES.map((t) => <option key={t} value={t}>{titled(t)}</option>)}
-        </select>
-      </Field>
-      <div className="form-row three">
-        <Field label="Base UoM"><input className="input" value={f.base_uom} onChange={(e) => set("base_uom", e.target.value)} /></Field>
-        <Field label="Purchase UoM"><input className="input" value={f.purchase_uom} onChange={(e) => set("purchase_uom", e.target.value)} /></Field>
-        <Field label="Conversion" hint="base units per purchase unit"><input className="input mono" value={f.purchase_to_base_factor} onChange={(e) => set("purchase_to_base_factor", e.target.value)} /></Field>
-      </div>
-      <div className="form-row three">
-        <Field label="Width (cm)"><input className="input mono" value={f.width_cm} onChange={(e) => set("width_cm", e.target.value)} /></Field>
-        <Field label="GSM"><input className="input mono" value={f.gsm} onChange={(e) => set("gsm", e.target.value)} /></Field>
-        <Field label="Lot tracked">
-          <select className="select" value={String(f.lot_tracked)} onChange={(e) => set("lot_tracked", e.target.value === "true")}>
-            <option value="true">Yes</option><option value="false">No</option>
-          </select>
-        </Field>
-      </div>
-      <Field label="Composition"><input className="input" value={f.composition} onChange={(e) => set("composition", e.target.value)} placeholder="100% Cotton" /></Field>
-    </Drawer>
-  );
-}
-
-/* ---------------- Customers ---------------- */
-function Customers() {
-  const { data, loading, reload } = useAsync(() => api.get<Customer[]>("/masters/customers"));
-  const [open, setOpen] = useState(false);
-  const { submit, saving, error } = useCreate("/masters/customers", () => { setOpen(false); reload(); });
-  const [f, setF] = useState({ name: "", currency: "USD", credit_limit: "0" });
-  return (
-    <Card title="Customers" hint="deactivate, never delete"
-      actions={<button className="btn primary sm" onClick={() => setOpen(true)}>+ New customer</button>}>
-      {loading ? <Spinner /> : (
-        <div className="table-wrap">
-          <table className="tbl">
-            <thead><tr><th>Code</th><th>Name</th><th>Currency</th><th className="num">Credit limit</th></tr></thead>
-            <tbody>
-              {data?.map((c) => (
-                <tr key={c.id}><td className="code">{c.code}</td><td>{c.name}</td><td className="mono">{c.currency}</td><td className="num">{money(c.credit_limit, c.currency)}</td></tr>
-              ))}
-              {!data?.length && <tr><td colSpan={4} className="muted">No customers yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {open && (
-        <Drawer title="New customer" sub="Module 1.1" onClose={() => setOpen(false)}
-          footer={<><button className="btn" onClick={() => setOpen(false)}>Cancel</button>
-            <button className="btn primary" disabled={saving || !f.name} onClick={() => submit(f, "Customer")}>Save</button></>}>
-          {error && <ErrorBox message={error} />}
-          <Field label="Name" required><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-          <div className="form-row two">
-            <Field label="Currency"><input className="input mono" value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value })} /></Field>
-            <Field label="Credit limit"><input className="input mono" value={f.credit_limit} onChange={(e) => setF({ ...f, credit_limit: e.target.value })} /></Field>
-          </div>
-        </Drawer>
-      )}
-    </Card>
-  );
-}
-
-/* ---------------- Suppliers ---------------- */
-function Suppliers() {
-  const { data, loading, reload } = useAsync(() => api.get<Supplier[]>("/masters/suppliers"));
-  const [open, setOpen] = useState(false);
-  const { submit, saving, error } = useCreate("/masters/suppliers", () => { setOpen(false); reload(); });
-  const [f, setF] = useState({ name: "", currency: "USD", lead_time_days: 0, material_types: ["fabric"] as string[] });
-  const toggle = (t: string) => setF({ ...f, material_types: f.material_types.includes(t) ? f.material_types.filter((x) => x !== t) : [...f.material_types, t] });
-  return (
-    <Card title="Suppliers" hint="approved per material type"
-      actions={<button className="btn primary sm" onClick={() => setOpen(true)}>+ New supplier</button>}>
-      {loading ? <Spinner /> : (
-        <div className="table-wrap">
-          <table className="tbl">
-            <thead><tr><th>Code</th><th>Name</th><th>Currency</th><th className="num">Lead time</th><th>Supplies</th></tr></thead>
-            <tbody>
-              {data?.map((s) => (
-                <tr key={s.id}><td className="code">{s.code}</td><td>{s.name}</td><td className="mono">{s.currency}</td>
-                  <td className="num">{s.lead_time_days} d</td>
-                  <td><div className="tag-list">{s.material_types.map((t) => <Chip key={t} tone="neutral" label={titled(t)} />)}</div></td></tr>
-              ))}
-              {!data?.length && <tr><td colSpan={5} className="muted">No suppliers yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {open && (
-        <Drawer title="New supplier" sub="Module 1.2" onClose={() => setOpen(false)}
-          footer={<><button className="btn" onClick={() => setOpen(false)}>Cancel</button>
-            <button className="btn primary" disabled={saving || !f.name} onClick={() => submit(f, "Supplier")}>Save</button></>}>
-          {error && <ErrorBox message={error} />}
-          <Field label="Name" required><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
-          <div className="form-row two">
-            <Field label="Currency"><input className="input mono" value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value })} /></Field>
-            <Field label="Lead time (days)"><input className="input mono" type="number" value={f.lead_time_days} onChange={(e) => setF({ ...f, lead_time_days: Number(e.target.value) })} /></Field>
-          </div>
-          <Field label="Approved material types">
-            <div className="tag-list">
-              {MATERIAL_TYPES.map((t) => (
-                <button key={t} type="button" onClick={() => toggle(t)}
-                  className={`chip ${f.material_types.includes(t) ? "info" : "neutral"}`} style={{ cursor: "pointer", border: "1px solid var(--line-strong)" }}>
-                  {titled(t)}
-                </button>
-              ))}
-            </div>
-          </Field>
-        </Drawer>
-      )}
-    </Card>
-  );
-}
-
-/* ---------------- Colours ---------------- */
-function Colours() {
-  const { data, loading, reload } = useAsync(() => api.get<Colour[]>("/masters/colours"));
-  const [open, setOpen] = useState(false);
-  const { submit, saving, error } = useCreate("/masters/colours", () => { setOpen(false); reload(); });
-  const [f, setF] = useState({ code: "", name: "", pantone: "", hex: "#2b3a7c" });
-  return (
-    <Card title="Colour library" hint="Module 1.4"
-      actions={<button className="btn primary sm" onClick={() => setOpen(true)}>+ New colour</button>}>
-      {loading ? <Spinner /> : (
-        <div className="table-wrap">
-          <table className="tbl">
-            <thead><tr><th>Code</th><th>Name</th><th>Pantone</th><th>Swatch</th></tr></thead>
-            <tbody>
-              {data?.map((c) => (
-                <tr key={c.id}><td className="code">{c.code}</td><td>{c.name}</td><td className="mono muted">{c.pantone || "—"}</td>
-                  <td><span className="swatch" style={{ background: c.hex || "#ccc" }} /> <span className="mono muted">{c.hex}</span></td></tr>
-              ))}
-              {!data?.length && <tr><td colSpan={4} className="muted">No colours yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {open && (
-        <Drawer title="New colour" sub="Module 1.4" onClose={() => setOpen(false)}
-          footer={<><button className="btn" onClick={() => setOpen(false)}>Cancel</button>
-            <button className="btn primary" disabled={saving || !f.code || !f.name} onClick={() => submit({ code: f.code, name: f.name, pantone: f.pantone || null, hex: f.hex }, "Colour")}>Save</button></>}>
-          {error && <ErrorBox message={error} />}
-          <div className="form-row two">
-            <Field label="Code" required><input className="input mono" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value.toUpperCase() })} placeholder="NAVY" /></Field>
-            <Field label="Name" required><input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Navy" /></Field>
-          </div>
-          <div className="form-row two">
-            <Field label="Pantone"><input className="input mono" value={f.pantone} onChange={(e) => setF({ ...f, pantone: e.target.value })} placeholder="19-3920 TCX" /></Field>
-            <Field label="Hex"><input className="input mono" type="color" value={f.hex} onChange={(e) => setF({ ...f, hex: e.target.value })} style={{ height: 38 }} /></Field>
-          </div>
-        </Drawer>
-      )}
-    </Card>
-  );
-}
-
-/* ---------------- Size ranges ---------------- */
-function Sizes() {
-  const { data, loading, reload } = useAsync(() => api.get<SizeRange[]>("/masters/size-ranges"));
-  const [open, setOpen] = useState(false);
-  const { submit, saving, error } = useCreate("/masters/size-ranges", () => { setOpen(false); reload(); });
-  const [code, setCode] = useState("");
-  const [name, setName] = useState("");
-  const [labels, setLabels] = useState("S, M, L, XL");
-  return (
-    <Card title="Size ranges" hint="ordered — order is load-bearing downstream"
-      actions={<button className="btn primary sm" onClick={() => setOpen(true)}>+ New size range</button>}>
-      {loading ? <Spinner /> : (
-        <div className="table-wrap">
-          <table className="tbl">
-            <thead><tr><th>Code</th><th>Name</th><th>Sizes</th></tr></thead>
-            <tbody>
-              {data?.map((s) => (
-                <tr key={s.id}><td className="code">{s.code}</td><td>{s.name}</td>
-                  <td><div className="tag-list">{s.sizes.map((z) => <Chip key={z.position} tone="neutral" label={z.label} />)}</div></td></tr>
-              ))}
-              {!data?.length && <tr><td colSpan={3} className="muted">No size ranges yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {open && (
-        <Drawer title="New size range" sub="Module 1.6" onClose={() => setOpen(false)}
-          footer={<><button className="btn" onClick={() => setOpen(false)}>Cancel</button>
-            <button className="btn primary" disabled={saving || !code || !name} onClick={() => {
-              const sizes = labels.split(",").map((l, i) => ({ position: i + 1, label: l.trim() })).filter((s) => s.label);
-              submit({ code, name, sizes }, "Size range");
-            }}>Save</button></>}>
-          {error && <ErrorBox message={error} />}
-          <div className="form-row two">
-            <Field label="Code" required><input className="input mono" value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="MENS-STD" /></Field>
-            <Field label="Name" required><input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Mens Standard" /></Field>
-          </div>
-          <Field label="Sizes (ordered)" required hint="comma-separated, smallest first"><input className="input mono" value={labels} onChange={(e) => setLabels(e.target.value)} /></Field>
-        </Drawer>
-      )}
-    </Card>
-  );
-}
+type Setter = (key: string, value: any) => void;
+function ActiveField({ value, onChange }: { value: boolean; onChange: (value: boolean) => void }) { return <Field label="Status"><select className="select" value={String(value)} onChange={(e) => onChange(e.target.value === "true")}><option value="true">Active</option><option value="false">Inactive</option></select></Field>; }
+function MaterialFields({ form, set, editing }: { form: Record<string, any>; set: Setter; editing: boolean }) { return <><Field label="Name" required><input className="input" value={form.name} onChange={(e) => set("name", e.target.value)} /></Field>{!editing && <><Field label="Material type"><select className="select" value={form.material_type} onChange={(e) => set("material_type", e.target.value)}>{MATERIAL_TYPES.map((type) => <option key={type}>{type}</option>)}</select></Field><div className="form-row three"><Field label="Base UoM"><input className="input" value={form.base_uom} onChange={(e) => set("base_uom", e.target.value)} /></Field><Field label="Purchase UoM"><input className="input" value={form.purchase_uom} onChange={(e) => set("purchase_uom", e.target.value)} /></Field><Field label="Conversion"><input className="input mono" value={form.purchase_to_base_factor} onChange={(e) => set("purchase_to_base_factor", e.target.value)} /></Field></div></>}<div className="form-row three"><Field label="Lead time"><input className="input mono" type="number" value={form.lead_time_days} onChange={(e) => set("lead_time_days", Number(e.target.value))} /></Field><Field label="Minimum order"><input className="input mono" value={form.min_order_qty} onChange={(e) => set("min_order_qty", e.target.value)} /></Field><Field label="Valuation"><select className="select" value={form.valuation_method ?? "weighted_average"} onChange={(e) => set("valuation_method", e.target.value)}><option value="weighted_average">Weighted average</option><option value="fifo">FIFO</option></select></Field></div><div className="form-row three"><Field label="Lot tracked"><select className="select" value={String(form.lot_tracked)} onChange={(e) => set("lot_tracked", e.target.value === "true")}><option value="true">Yes</option><option value="false">No</option></select></Field><Field label="Width cm"><input className="input mono" value={form.width_cm ?? ""} onChange={(e) => set("width_cm", e.target.value)} /></Field><Field label="GSM"><input className="input mono" value={form.gsm ?? ""} onChange={(e) => set("gsm", e.target.value)} /></Field></div><Field label="Composition"><input className="input" value={form.composition ?? ""} onChange={(e) => set("composition", e.target.value)} /></Field></>; }
+function CustomerFields({ form, set }: { form: Record<string, any>; set: Setter }) { return <><Field label="Name" required><input className="input" value={form.name} onChange={(e) => set("name", e.target.value)} /></Field><div className="form-row two"><Field label="Currency"><input className="input mono" value={form.currency} onChange={(e) => set("currency", e.target.value.toUpperCase())} /></Field><Field label="Credit limit"><input className="input mono" value={form.credit_limit} onChange={(e) => set("credit_limit", e.target.value)} /></Field></div><Field label="Payment terms"><input className="input" value={form.payment_terms ?? ""} onChange={(e) => set("payment_terms", e.target.value)} /></Field><Field label="Billing address"><input className="input" value={form.billing_address ?? ""} onChange={(e) => set("billing_address", e.target.value)} /></Field></>; }
+function SupplierFields({ form, set }: { form: Record<string, any>; set: Setter }) { const types: string[] = form.material_types ?? []; return <><Field label="Name" required><input className="input" value={form.name} onChange={(e) => set("name", e.target.value)} /></Field><div className="form-row two"><Field label="Currency"><input className="input mono" value={form.currency} onChange={(e) => set("currency", e.target.value.toUpperCase())} /></Field><Field label="Lead time days"><input className="input mono" type="number" value={form.lead_time_days} onChange={(e) => set("lead_time_days", Number(e.target.value))} /></Field></div><Field label="Payment terms"><input className="input" value={form.payment_terms ?? ""} onChange={(e) => set("payment_terms", e.target.value)} /></Field><Field label="Approved material types"><div className="role-grid">{MATERIAL_TYPES.map((type) => <label key={type}><input type="checkbox" checked={types.includes(type)} onChange={(e) => set("material_types", e.target.checked ? [...types, type] : types.filter((item) => item !== type))} /> {type}</label>)}</div></Field></>; }
+function ColourFields({ form, set }: { form: Record<string, any>; set: Setter }) { return <><div className="form-row two"><Field label="Code" required><input className="input mono" value={form.code} onChange={(e) => set("code", e.target.value.toUpperCase())} /></Field><Field label="Name" required><input className="input" value={form.name} onChange={(e) => set("name", e.target.value)} /></Field></div><div className="form-row two"><Field label="Pantone"><input className="input" value={form.pantone ?? ""} onChange={(e) => set("pantone", e.target.value)} /></Field><Field label="Hex"><input className="input" type="color" value={form.hex || "#000000"} onChange={(e) => set("hex", e.target.value)} /></Field></div></>; }
+function SeasonFields({ form, set }: { form: Record<string, any>; set: Setter }) { return <><div className="form-row two"><Field label="Code" required><input className="input mono" value={form.code} onChange={(e) => set("code", e.target.value.toUpperCase())} /></Field><Field label="Name" required><input className="input" value={form.name} onChange={(e) => set("name", e.target.value)} /></Field></div><div className="form-row two"><Field label="Start date"><input className="input" type="date" value={form.start_date ?? ""} onChange={(e) => set("start_date", e.target.value)} /></Field><Field label="End date"><input className="input" type="date" value={form.end_date ?? ""} onChange={(e) => set("end_date", e.target.value)} /></Field></div></>; }
+function SizeFields({ form, set, editing }: { form: Record<string, any>; set: Setter; editing: boolean }) { return <><div className="form-row two"><Field label="Code" required><input className="input mono" disabled={editing} value={form.code} onChange={(e) => set("code", e.target.value.toUpperCase())} /></Field><Field label="Name" required><input className="input" value={form.name} onChange={(e) => set("name", e.target.value)} /></Field></div><Field label="Ordered sizes" hint={editing ? "Immutable because BOMs and orders reference these labels" : "Comma-separated, smallest first"}><input className="input mono" disabled={editing} value={form.labels} onChange={(e) => set("labels", e.target.value)} /></Field></>; }
