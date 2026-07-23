@@ -31,6 +31,30 @@ The order-to-cash spine runs end to end. The **Part C acceptance scenario**
 quality → costing → finance → P&L) is executed as a single test:
 [`backend/tests/test_acceptance_partc.py`](backend/tests/test_acceptance_partc.py).
 
+## Business operations expansion
+
+The production workbenches now include:
+
+- Search, filters, client pagination, server paging parameters, sorting, and
+  spreadsheet-safe CSV exports for the primary operational registers.
+- Ledger-backed warehouse transfers, returns, put-away, roll split/join,
+  regrading, and cycle counts with durable operation histories.
+- Sales-order amendments and cancellations with immutable snapshots, pricing
+  checks, and customer credit-exposure gating before confirmation.
+- Optional PO approval gates, PO amendment history, persistent receipt history,
+  and supplier delivery/fulfilment/quality performance.
+- Versioned production routes, append-only WIP movement capture, persistent
+  sewing/subcontract registers, and step-level WIP balances.
+- Incoming/inline/final inspection history, defect Pareto analytics, and a lab
+  test register with pass/fail completion and failed-roll quarantine.
+- General-ledger inquiry, trial balance, balance sheet, cash-flow classification,
+  AR/AP aging, and exports.
+- Browser-ready PDFs for purchase orders, invoices, goods receipts, cut orders,
+  and sewing work orders with repeating table headers and page numbers.
+
+The expansion is covered by
+[`backend/tests/test_business_expansion.py`](backend/tests/test_business_expansion.py).
+
 ## Architecture at a glance
 
 - **Kernel** (`app/kernel`) — cross-cutting primitives: gap-free document
@@ -59,7 +83,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 # API docs at http://127.0.0.1:8000/docs
 
-# run the test suite (66 tests, including the Part C acceptance scenario)
+# run the test suite (including the Part C acceptance scenario)
 pytest
 ```
 
@@ -114,11 +138,24 @@ and login attempts are throttled by both account and client IP. Responses carry
 defensive browser headers and reject oversized request bodies.
 
 For the first production startup, set `BOOTSTRAP_ADMIN_EMAIL` and a random
-`BOOTSTRAP_ADMIN_PASSWORD` of at least 12 characters. Remove both settings once
+`BOOTSTRAP_ADMIN_PASSWORD` of at least 15 characters. Remove both settings once
 the administrator exists. Also set `SESSION_COOKIE_SECURE=true`, `ALLOWED_HOSTS`,
 and the HTTPS `CORS_ORIGINS` value; see `backend/.env.example`.
 Set `AUTO_CREATE_SCHEMA=false` in production and apply `alembic upgrade head`
 before starting the application.
+
+If every administrator is locked out, recover an existing account from the
+backend directory. The command prompts securely and never accepts the password
+as a command-line argument:
+
+```bash
+python -m app.security.cli reset-password --email admin@example.com
+```
+
+The reset revokes existing sessions and requires the user to choose a new
+password at the next sign-in. Administrators can also inspect and revoke
+sessions, reset user passwords, and review security audit events from **Access
+Control**.
 Set `ENVIRONMENT=production` as well: startup will then reject SQLite, insecure
 cookies, development hosts/origins, automatic schema creation, and public API
 documentation instead of silently launching with an unsafe configuration.
