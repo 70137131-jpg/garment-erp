@@ -52,6 +52,7 @@ class ShipmentDispatched(DomainEvent):
     customer_id: int
     currency: str
     invoice_value: Decimal
+    shipment_id: Optional[int] = None
 
 
 @dataclass

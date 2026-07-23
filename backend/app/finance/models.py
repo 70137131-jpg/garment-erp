@@ -117,10 +117,13 @@ class ARInvoice(TimestampMixin, table=True):
     invoice_number: str = Field(index=True, unique=True)
     customer_id: int = Field(foreign_key="customer.id", index=True)
     sales_order_id: Optional[int] = Field(default=None, foreign_key="sales_order.id")
+    shipment_id: Optional[int] = Field(default=None, foreign_key="shipment.id", index=True)
     currency: str = "USD"
     amount: Decimal = money_field(default=Decimal("0"))
     settled_amount: Decimal = money_field(default=Decimal("0"))
     status: SettlementStatus = Field(default=SettlementStatus.open, index=True)
+    invoice_date: Optional[date] = None
+    due_date: Optional[date] = Field(default=None, index=True)
 
 
 class APBill(TimestampMixin, table=True):
@@ -134,6 +137,8 @@ class APBill(TimestampMixin, table=True):
     amount: Decimal = money_field(default=Decimal("0"))
     settled_amount: Decimal = money_field(default=Decimal("0"))
     status: SettlementStatus = Field(default=SettlementStatus.open, index=True)
+    bill_date: Optional[date] = None
+    due_date: Optional[date] = Field(default=None, index=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -179,10 +184,13 @@ class ARInvoiceRead(SQLModel):
     invoice_number: str
     customer_id: int
     sales_order_id: Optional[int]
+    shipment_id: Optional[int]
     amount: Decimal
     settled_amount: Decimal
     outstanding: Decimal
     status: SettlementStatus
+    invoice_date: Optional[date] = None
+    due_date: Optional[date] = None
 
 
 class APBillRead(SQLModel):
@@ -194,6 +202,8 @@ class APBillRead(SQLModel):
     settled_amount: Decimal
     outstanding: Decimal
     status: SettlementStatus
+    bill_date: Optional[date] = None
+    due_date: Optional[date] = None
 
 
 class SettleRequest(SQLModel):
@@ -205,3 +215,77 @@ class ProfitAndLossRead(SQLModel):
     total_expense: Decimal
     net_profit: Decimal
     by_account: dict
+
+
+class GeneralLedgerLineRead(SQLModel):
+    journal_id: int
+    entry_number: str
+    entry_date: Optional[date]
+    account_id: int
+    account_code: str
+    account_name: str
+    description: Optional[str]
+    reference_type: Optional[str]
+    reference_id: Optional[int]
+    debit: Decimal
+    credit: Decimal
+    running_balance: Decimal
+
+
+class TrialBalanceLineRead(SQLModel):
+    account_id: int
+    account_code: str
+    account_name: str
+    account_type: AccountType
+    debit: Decimal
+    credit: Decimal
+
+
+class TrialBalanceRead(SQLModel):
+    as_of: date
+    total_debit: Decimal
+    total_credit: Decimal
+    lines: List[TrialBalanceLineRead]
+
+
+class FinancialStatementLine(SQLModel):
+    account_code: str
+    account_name: str
+    amount: Decimal
+
+
+class BalanceSheetRead(SQLModel):
+    as_of: date
+    assets: List[FinancialStatementLine]
+    liabilities: List[FinancialStatementLine]
+    equity: List[FinancialStatementLine]
+    total_assets: Decimal
+    total_liabilities: Decimal
+    total_equity: Decimal
+    liabilities_and_equity: Decimal
+
+
+class CashFlowRead(SQLModel):
+    date_from: date
+    date_to: date
+    operating: Decimal
+    investing: Decimal
+    financing: Decimal
+    net_change: Decimal
+
+
+class AgingBucketRead(SQLModel):
+    party_id: int
+    current: Decimal
+    days_1_30: Decimal
+    days_31_60: Decimal
+    days_61_90: Decimal
+    over_90: Decimal
+    total: Decimal
+
+
+class AgingReportRead(SQLModel):
+    as_of: date
+    ledger: str
+    total: Decimal
+    parties: List[AgingBucketRead]

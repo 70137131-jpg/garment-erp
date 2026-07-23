@@ -56,6 +56,8 @@ class FourPointDefect(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     inspection_id: int = Field(foreign_key="four_point_inspection.id", index=True)
     description: Optional[str] = None
+    defect_code: Optional[str] = Field(default=None, index=True)
+    category: Optional[str] = Field(default=None, index=True)
     penalty_points: int = 0  # 1..4
     position_m: Optional[Decimal] = quantity_field(default=None, nullable=True)
 
@@ -67,6 +69,8 @@ class FourPointDefect(SQLModel, table=True):
 # --------------------------------------------------------------------------- #
 class DefectInput(SQLModel):
     description: Optional[str] = None
+    defect_code: Optional[str] = None
+    category: Optional[str] = None
     penalty_points: int
     position_m: Optional[Decimal] = None
 
@@ -82,6 +86,8 @@ class FourPointInspectionCreate(SQLModel):
 
 class DefectRead(SQLModel):
     description: Optional[str]
+    defect_code: Optional[str] = None
+    category: Optional[str] = None
     penalty_points: int
     position_m: Optional[Decimal]
 
@@ -173,3 +179,77 @@ class FinalInspectionRead(SQLModel):
     reject_number: int
     defects_found: int
     result: InspectionResult
+
+
+class LabTestStatus(str, Enum):
+    pending = "pending"
+    passed = "passed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
+class LabTest(TimestampMixin, table=True):
+    __tablename__ = "lab_test"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    test_number: str = Field(index=True, unique=True)
+    material_id: int = Field(foreign_key="material.id", index=True)
+    roll_id: Optional[int] = Field(default=None, foreign_key="roll.id", index=True)
+    supplier_id: Optional[int] = Field(default=None, foreign_key="supplier.id", index=True)
+    test_type: str = Field(index=True)
+    method: Optional[str] = None
+    specification: Optional[str] = None
+    measured_value: Optional[str] = None
+    status: LabTestStatus = Field(default=LabTestStatus.pending, index=True)
+    submitted_date: Optional[date] = None
+    completed_date: Optional[date] = None
+    laboratory: Optional[str] = None
+    certificate_reference: Optional[str] = None
+    tested_by: Optional[str] = None
+    note: Optional[str] = None
+
+
+class LabTestCreate(SQLModel):
+    material_id: int
+    roll_id: Optional[int] = None
+    supplier_id: Optional[int] = None
+    test_type: str
+    method: Optional[str] = None
+    specification: Optional[str] = None
+    submitted_date: Optional[date] = None
+    laboratory: Optional[str] = None
+    note: Optional[str] = None
+
+
+class LabTestComplete(SQLModel):
+    passed: bool
+    measured_value: str
+    completed_date: Optional[date] = None
+    certificate_reference: Optional[str] = None
+    note: Optional[str] = None
+
+
+class LabTestRead(SQLModel):
+    id: int
+    test_number: str
+    material_id: int
+    roll_id: Optional[int]
+    supplier_id: Optional[int]
+    test_type: str
+    method: Optional[str]
+    specification: Optional[str]
+    measured_value: Optional[str]
+    status: LabTestStatus
+    submitted_date: Optional[date]
+    completed_date: Optional[date]
+    laboratory: Optional[str]
+    certificate_reference: Optional[str]
+    tested_by: Optional[str]
+    note: Optional[str]
+
+
+class DefectAnalyticsRead(SQLModel):
+    defect_key: str
+    occurrences: int
+    penalty_points: int
+    share_pct: Decimal

@@ -183,6 +183,7 @@ def test_ts100_masters_to_pnl(finance_client, session):
     assert invoices[0]["status"] == "paid"
 
     pnl = c.get("/finance/profit-and-loss").json()
-    # Revenue 5000 recognised; net profit reflects it (COGS posting is V1 scope).
+    # Revenue and valued production issue are recognised at shipment.
     assert Decimal(pnl["total_income"]) == Decimal("5000.00")
-    assert Decimal(pnl["net_profit"]) == Decimal("5000.00")
+    assert Decimal(pnl["total_expense"]) == Decimal("1638.00")
+    assert Decimal(pnl["net_profit"]) == Decimal("3362.00")

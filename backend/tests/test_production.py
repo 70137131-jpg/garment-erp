@@ -148,6 +148,11 @@ def test_sewing_order_daily_output_and_average(client):
     assert body["produced_qty"] == 500
     assert body["status"] == "active"
     assert Decimal(body["average_efficiency_pct"]) == Decimal("52.08")
+    listed = client.get("/production/sewing-orders").json()
+    assert [order["id"] for order in listed] == [sew["id"]]
+    outputs = client.get(f"/production/sewing-orders/{sew['id']}/daily-outputs").json()
+    assert len(outputs) == 1
+    assert outputs[0]["produced_qty"] == 500
 
 
 def test_daily_output_idempotent(client):
@@ -187,3 +192,6 @@ def test_subcontract_outstanding_balance(client):
 
     r = client.post(f"/production/subcontract-orders/{sc['id']}/receive", json={"received_qty": 10})
     assert r.status_code == 422
+    listed = client.get("/production/subcontract-orders").json()
+    assert listed[0]["id"] == sc["id"]
+    assert listed[0]["status"] == "received"

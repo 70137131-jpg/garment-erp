@@ -157,3 +157,34 @@ class ChangePasswordRequest(SQLModel):
     @classmethod
     def strong_password(cls, value: str) -> str:
         return validate_password(value)
+
+
+class PasswordResetRequest(SQLModel):
+    temporary_password: str
+
+    @field_validator("temporary_password")
+    @classmethod
+    def strong_password(cls, value: str) -> str:
+        return validate_password(value)
+
+
+class AuthSessionRead(SQLModel):
+    id: int
+    user_id: int
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    revoked_at: Optional[datetime]
+    ip_address: Optional[str]
+    user_agent: Optional[str]
+
+
+class SecurityAuditEventRead(SQLModel):
+    id: int
+    occurred_at: datetime
+    event_type: str
+    actor_user_id: Optional[int]
+    target_user_id: Optional[int]
+    email: Optional[str]
+    ip_address: Optional[str]
+    detail: Optional[str]

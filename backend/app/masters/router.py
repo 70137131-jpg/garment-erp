@@ -11,9 +11,11 @@ from .models import (
     Colour,
     ColourCreate,
     ColourRead,
+    ColourUpdate,
     Customer,
     CustomerCreate,
     CustomerRead,
+    CustomerUpdate,
     Material,
     MaterialCreate,
     MaterialRead,
@@ -22,15 +24,18 @@ from .models import (
     Season,
     SeasonCreate,
     SeasonRead,
+    SeasonUpdate,
     SizeItemRead,
     SizeRange,
     SizeRangeCreate,
     SizeRangeItem,
     SizeRangeRead,
+    SizeRangeUpdate,
     Supplier,
     SupplierCreate,
     SupplierMaterialType,
     SupplierRead,
+    SupplierUpdate,
 )
 
 router = APIRouter(prefix="/masters", tags=["masters"])
@@ -42,6 +47,11 @@ def _commit(session: Session) -> None:
     except IntegrityError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail="Duplicate or invalid record") from exc
+
+
+def _apply_update(record, payload) -> None:
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(record, field, value)
 
 
 # --------------------------------------------------------------------------- #
@@ -61,11 +71,30 @@ def list_colours(session: Session = Depends(get_session)):
     return session.exec(select(Colour)).all()
 
 
+@router.patch("/colours/{colour_id}", response_model=ColourRead)
+def update_colour(
+    colour_id: int,
+    payload: ColourUpdate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_roles(Role.merchandiser)),
+):
+    colour = session.get(Colour, colour_id)
+    if colour is None:
+        raise HTTPException(status_code=404, detail="Colour not found")
+    _apply_update(colour, payload)
+    session.add(colour)
+    _commit(session)
+    session.refresh(colour)
+    return colour
+
+
 # --------------------------------------------------------------------------- #
 # Seasons (1.5)
 # --------------------------------------------------------------------------- #
 @router.post("/seasons", response_model=SeasonRead, status_code=201)
 def create_season(payload: SeasonCreate, session: Session = Depends(get_session), _: str = Depends(require_roles(Role.merchandiser))):
+    if payload.start_date and payload.end_date and payload.end_date < payload.start_date:
+        raise HTTPException(status_code=422, detail="Season end date cannot precede start date")
     season = Season.model_validate(payload)
     session.add(season)
     _commit(session)
@@ -76,6 +105,25 @@ def create_season(payload: SeasonCreate, session: Session = Depends(get_session)
 @router.get("/seasons", response_model=List[SeasonRead])
 def list_seasons(session: Session = Depends(get_session)):
     return session.exec(select(Season)).all()
+
+
+@router.patch("/seasons/{season_id}", response_model=SeasonRead)
+def update_season(
+    season_id: int,
+    payload: SeasonUpdate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_roles(Role.merchandiser)),
+):
+    season = session.get(Season, season_id)
+    if season is None:
+        raise HTTPException(status_code=404, detail="Season not found")
+    _apply_update(season, payload)
+    if season.start_date and season.end_date and season.end_date < season.start_date:
+        raise HTTPException(status_code=422, detail="Season end date cannot precede start date")
+    session.add(season)
+    _commit(session)
+    session.refresh(season)
+    return season
 
 
 # --------------------------------------------------------------------------- #
@@ -112,6 +160,23 @@ def list_size_ranges(session: Session = Depends(get_session)):
     return [_size_range_read(r) for r in ranges]
 
 
+@router.patch("/size-ranges/{size_range_id}", response_model=SizeRangeRead)
+def update_size_range(
+    size_range_id: int,
+    payload: SizeRangeUpdate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_roles(Role.merchandiser)),
+):
+    size_range = session.get(SizeRange, size_range_id)
+    if size_range is None:
+        raise HTTPException(status_code=404, detail="Size range not found")
+    _apply_update(size_range, payload)
+    session.add(size_range)
+    _commit(session)
+    session.refresh(size_range)
+    return _size_range_read(size_range)
+
+
 # --------------------------------------------------------------------------- #
 # Customers (1.1)
 # --------------------------------------------------------------------------- #
@@ -128,6 +193,23 @@ def create_customer(payload: CustomerCreate, session: Session = Depends(get_sess
 @router.get("/customers", response_model=List[CustomerRead])
 def list_customers(session: Session = Depends(get_session)):
     return session.exec(select(Customer)).all()
+
+
+@router.patch("/customers/{customer_id}", response_model=CustomerRead)
+def update_customer(
+    customer_id: int,
+    payload: CustomerUpdate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_roles(Role.merchandiser)),
+):
+    customer = session.get(Customer, customer_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    _apply_update(customer, payload)
+    session.add(customer)
+    _commit(session)
+    session.refresh(customer)
+    return customer
 
 
 # --------------------------------------------------------------------------- #
@@ -172,6 +254,30 @@ def create_supplier(payload: SupplierCreate, session: Session = Depends(get_sess
 def list_suppliers(session: Session = Depends(get_session)):
     suppliers = session.exec(select(Supplier)).all()
     return [_supplier_read(s) for s in suppliers]
+
+
+@router.patch("/suppliers/{supplier_id}", response_model=SupplierRead)
+def update_supplier(
+    supplier_id: int,
+    payload: SupplierUpdate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_roles(Role.procurement, Role.merchandiser)),
+):
+    supplier = session.get(Supplier, supplier_id)
+    if supplier is None:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    values = payload.model_dump(exclude_unset=True, exclude={"material_types"})
+    for field, value in values.items():
+        setattr(supplier, field, value)
+    if payload.material_types is not None:
+        supplier.material_types = [
+            SupplierMaterialType(material_type=material_type)
+            for material_type in dict.fromkeys(payload.material_types)
+        ]
+    session.add(supplier)
+    _commit(session)
+    session.refresh(supplier)
+    return _supplier_read(supplier)
 
 
 # --------------------------------------------------------------------------- #

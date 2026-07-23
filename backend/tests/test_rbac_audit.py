@@ -2,8 +2,14 @@
 
 from decimal import Decimal
 
+import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+
 from tests.factories import make_fabric, make_size_range, make_supplier
 from app.kernel.rbac import Principal, Role, get_current_principal
+from app.kernel.immutability import install_immutable_record_guards
+from app.security.models import SecurityAuditEvent
 
 
 def _act_as(client, *roles: Role):
@@ -87,3 +93,50 @@ def test_posted_journal_immutable_via_reversal(finance_client):
     assert rev.status_code == 200
     original = finance_client.get(f"/finance/journal-entries/{created['id']}").json()
     assert original["status"] == "reversed"
+
+
+def test_database_guards_reject_direct_ledger_and_audit_tampering(client, finance_client, session):
+    """The append-only rule still holds when application endpoints are bypassed."""
+    install_immutable_record_guards(session.get_bind())
+    material_id = make_fabric(client)
+    assert client.post(
+        "/inventory/adjustments", json={"material_id": material_id, "quantity": "5", "note": "opening"}
+    ).status_code == 201
+    ledger_id = client.get("/inventory/ledger", params={"material_id": material_id}).json()[0]["id"]
+
+    audit_event = SecurityAuditEvent(event_type="test_event")
+    session.add(audit_event)
+    session.commit()
+
+    for statement in (
+        text("UPDATE stock_ledger_entry SET quantity = 999 WHERE id = :id"),
+        text("DELETE FROM stock_ledger_entry WHERE id = :id"),
+    ):
+        with pytest.raises(IntegrityError, match="Immutable record"):
+            session.execute(statement, {"id": ledger_id})
+            session.commit()
+        session.rollback()
+
+    for statement in (
+        text("UPDATE security_audit_event SET event_type = 'changed' WHERE id = :id"),
+        text("DELETE FROM security_audit_event WHERE id = :id"),
+    ):
+        with pytest.raises(IntegrityError, match="Immutable record"):
+            session.execute(statement, {"id": audit_event.id})
+            session.commit()
+        session.rollback()
+
+    created = finance_client.post("/finance/journal-entries", json={"memo": "guard", "lines": [
+        {"account_code": "1000", "debit": "10"}, {"account_code": "2000", "credit": "10"}
+    ]}).json()
+    journal_line_id = session.execute(
+        text("SELECT id FROM journal_line WHERE journal_entry_id = :id"), {"id": created["id"]}
+    ).scalars().first()
+    assert journal_line_id is not None
+    with pytest.raises(IntegrityError, match="Immutable record"):
+        session.execute(text("UPDATE journal_line SET debit = 20 WHERE id = :id"), {"id": journal_line_id})
+        session.commit()
+    session.rollback()
+
+    # The one permitted state change is a reversing entry; no journal history is edited.
+    assert finance_client.post(f"/finance/journal-entries/{created['id']}/reverse").status_code == 200

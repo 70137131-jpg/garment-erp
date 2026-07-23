@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -18,8 +18,12 @@ from ..kernel.rbac import (
 from .middleware import set_csrf_cookie
 from .models import (
     AuthSession,
+    AuthSessionRead,
     ChangePasswordRequest,
     LoginRequest,
+    PasswordResetRequest,
+    SecurityAuditEvent,
+    SecurityAuditEventRead,
     User,
     UserCreate,
     UserRead,
@@ -38,6 +42,7 @@ from .service import (
     normalize_email,
     password_needs_rehash,
     replace_roles,
+    reset_user_password,
     revoke_user_sessions,
     verify_password,
 )
@@ -226,6 +231,99 @@ def create_user(
         raise HTTPException(status_code=409, detail="A user with this email already exists") from exc
     session.refresh(user)
     return _read_user(session, user)
+
+
+@router.post(
+    "/users/{user_id}/reset-password",
+    status_code=204,
+    dependencies=[Depends(require_permissions(Permission.users_manage))],
+)
+def reset_password(
+    user_id: int,
+    payload: PasswordResetRequest,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+):
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    reset_user_password(
+        session,
+        user,
+        payload.temporary_password,
+        actor_user_id=principal.user_id,
+    )
+    session.commit()
+
+
+@router.get(
+    "/sessions",
+    response_model=list[AuthSessionRead],
+    dependencies=[Depends(require_permissions(Permission.users_manage))],
+)
+def list_sessions(
+    user_id: int | None = None,
+    active_only: bool = False,
+    session: Session = Depends(get_session),
+):
+    statement = select(AuthSession)
+    if user_id is not None:
+        statement = statement.where(AuthSession.user_id == user_id)
+    if active_only:
+        statement = statement.where(
+            AuthSession.revoked_at.is_(None), AuthSession.expires_at > utcnow()
+        )
+    return session.exec(statement.order_by(AuthSession.id.desc())).all()
+
+
+@router.post(
+    "/sessions/{session_id}/revoke",
+    status_code=204,
+    dependencies=[Depends(require_permissions(Permission.users_manage))],
+)
+def revoke_session(
+    session_id: int,
+    principal: Principal = Depends(get_current_principal),
+    session: Session = Depends(get_session),
+):
+    auth_session = session.get(AuthSession, session_id)
+    if auth_session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if auth_session.revoked_at is None:
+        auth_session.revoked_at = utcnow()
+        session.add(auth_session)
+        audit(
+            session,
+            "admin_session_revoked",
+            actor_user_id=principal.user_id,
+            target_user_id=auth_session.user_id,
+            detail=f"session_id={auth_session.id}",
+        )
+        session.commit()
+
+
+@router.get(
+    "/audit-events",
+    response_model=list[SecurityAuditEventRead],
+    dependencies=[Depends(require_permissions(Permission.users_manage))],
+)
+def list_audit_events(
+    limit: int = Query(default=200, ge=1, le=1000),
+    event_type: str | None = None,
+    user_id: int | None = None,
+    session: Session = Depends(get_session),
+):
+    statement = select(SecurityAuditEvent)
+    if event_type:
+        statement = statement.where(SecurityAuditEvent.event_type == event_type)
+    if user_id is not None:
+        statement = statement.where(
+            (SecurityAuditEvent.actor_user_id == user_id)
+            | (SecurityAuditEvent.target_user_id == user_id)
+        )
+    return session.exec(
+        statement.order_by(SecurityAuditEvent.id.desc()).limit(limit)
+    ).all()
 
 
 def _active_admin_count(session: Session) -> int:

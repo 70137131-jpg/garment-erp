@@ -17,16 +17,25 @@ If the chart of accounts has not been seeded (e.g. a bare test database), the
 handlers no-op — operations must never fail because finance is not configured.
 """
 
+from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import func
+from sqlmodel import select
+
 from ..events import GoodsReceiptPosted, ShipmentDispatched
+from ..inventory.models import MovementType, StockLedgerEntry
 from ..kernel.context import get_current_session
 from ..kernel.events import subscribe
 from ..kernel.numbering import next_document_number
+from ..kernel.types import quantize_money
+from ..production.models import CutOrder
+from ..sales.models import SalesOrderLine, SalesOrderSizeCell, Shipment, ShipmentLine
 from .models import APBill, ARInvoice, JournalSource, SettlementStatus
 from .service import (
     ACC_AP,
     ACC_AR,
+    ACC_COGS,
     ACC_INVENTORY,
     ACC_SALES,
     account_by_code,
@@ -62,6 +71,7 @@ def on_goods_receipt(event: GoodsReceiptPosted) -> None:
             currency=event.currency,
             amount=event.total_value,
             status=SettlementStatus.open,
+            bill_date=date.today(),
         )
     )
     session.flush()
@@ -88,11 +98,66 @@ def on_shipment(event: ShipmentDispatched) -> None:
             invoice_number=invoice_number,
             customer_id=event.customer_id,
             sales_order_id=event.sales_order_id,
+            shipment_id=event.shipment_id,
             currency=event.currency,
             amount=event.invoice_value,
             status=SettlementStatus.open,
+            invoice_date=date.today(),
         )
     )
+    # COGS is driven by the same valuation stamped on production issues.  Each
+    # partial shipment receives its cumulative share of issued cost, avoiding a
+    # second debit when the balance ships later.
+    if event.shipment_id is not None:
+        shipment = session.get(Shipment, event.shipment_id)
+        cut_order_ids = session.exec(
+            select(CutOrder.id).where(CutOrder.sales_order_id == event.sales_order_id)
+        ).all()
+        total_issued_cost = Decimal("0")
+        if cut_order_ids:
+            value = session.exec(
+                select(func.coalesce(func.sum(StockLedgerEntry.extended_cost), 0)).where(
+                    StockLedgerEntry.reference_type == "cut_order",
+                    StockLedgerEntry.reference_id.in_(cut_order_ids),
+                    StockLedgerEntry.movement_type == MovementType.issue,
+                )
+            ).one()
+            total_issued_cost = quantize_money(-Decimal(value))
+        # Confirmed order quantity is available from the sales line cells.
+        confirmed_qty = session.exec(
+            select(func.coalesce(func.sum(SalesOrderSizeCell.confirmed_qty), 0))
+            .join(SalesOrderLine, SalesOrderLine.id == SalesOrderSizeCell.line_id)
+            .where(SalesOrderLine.sales_order_id == event.sales_order_id)
+        ).one()
+        prior_cogs = session.exec(
+            select(func.coalesce(func.sum(Shipment.cost_of_goods), 0)).where(
+                Shipment.sales_order_id == event.sales_order_id,
+                Shipment.id != shipment.id,
+            )
+        ).one()
+        cumulative_qty = Decimal(session.exec(
+            select(func.coalesce(func.sum(ShipmentLine.quantity), 0))
+            .join(Shipment, Shipment.id == ShipmentLine.shipment_id)
+            .where(Shipment.sales_order_id == event.sales_order_id)
+        ).one())
+        target_cogs = quantize_money(
+            total_issued_cost * cumulative_qty / Decimal(confirmed_qty)
+        ) if confirmed_qty else Decimal("0")
+        cogs = quantize_money(max(Decimal("0"), target_cogs - Decimal(prior_cogs)))
+        shipment.cost_of_goods = cogs
+        session.add(shipment)
+        if cogs > 0:
+            post_journal(
+                session,
+                lines=[
+                    (ACC_COGS, cogs, Decimal("0"), "Cost of goods sold"),
+                    (ACC_INVENTORY, Decimal("0"), cogs, "Inventory consumed"),
+                ],
+                memo=f"COGS for shipment {shipment.shipment_number}",
+                source=JournalSource.system,
+                reference_type="shipment_cogs",
+                reference_id=shipment.id,
+            )
     session.flush()
 
 

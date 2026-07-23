@@ -1,9 +1,10 @@
 """Finance services: CoA seeding, double-entry journal posting, AR/AP, P&L."""
 
+from datetime import date
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
 from ..kernel.numbering import next_document_number
@@ -204,4 +205,136 @@ def profit_and_loss(session: Session) -> Dict:
         "total_expense": quantize_money(total_expense),
         "net_profit": net,
         "by_account": by_account,
+    }
+
+
+def account_totals(
+    session: Session,
+    account: Account,
+    *,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+) -> tuple[Decimal, Decimal]:
+    stmt = (
+        select(
+            func.coalesce(func.sum(JournalLine.debit), 0),
+            func.coalesce(func.sum(JournalLine.credit), 0),
+        )
+        .join(JournalEntry, JournalEntry.id == JournalLine.journal_entry_id)
+        .where(
+            JournalLine.account_id == account.id,
+            JournalEntry.status == JournalStatus.posted,
+        )
+    )
+    if date_from is not None:
+        stmt = stmt.where(or_(JournalEntry.entry_date >= date_from, JournalEntry.entry_date.is_(None)))
+    if date_to is not None:
+        stmt = stmt.where(or_(JournalEntry.entry_date <= date_to, JournalEntry.entry_date.is_(None)))
+    debit, credit = session.exec(stmt).one()
+    return quantize_money(Decimal(debit)), quantize_money(Decimal(credit))
+
+
+def trial_balance(session: Session, as_of: date) -> Dict:
+    lines = []
+    total_debit = Decimal("0")
+    total_credit = Decimal("0")
+    for account in session.exec(select(Account).order_by(Account.code)).all():
+        debit, credit = account_totals(session, account, date_to=as_of)
+        net = quantize_money(debit - credit)
+        debit_balance = max(net, Decimal("0"))
+        credit_balance = max(-net, Decimal("0"))
+        if debit_balance == 0 and credit_balance == 0:
+            continue
+        lines.append({
+            "account_id": account.id,
+            "account_code": account.code,
+            "account_name": account.name,
+            "account_type": account.type,
+            "debit": debit_balance,
+            "credit": credit_balance,
+        })
+        total_debit += debit_balance
+        total_credit += credit_balance
+    return {
+        "as_of": as_of,
+        "total_debit": quantize_money(total_debit),
+        "total_credit": quantize_money(total_credit),
+        "lines": lines,
+    }
+
+
+def balance_sheet(session: Session, as_of: date) -> Dict:
+    sections = {AccountType.asset: [], AccountType.liability: [], AccountType.equity: []}
+    totals = {kind: Decimal("0") for kind in sections}
+    current_earnings = Decimal("0")
+    for account in session.exec(select(Account).order_by(Account.code)).all():
+        debit, credit = account_totals(session, account, date_to=as_of)
+        natural = debit - credit if account.type in (AccountType.asset, AccountType.expense) else credit - debit
+        natural = quantize_money(natural)
+        if account.type in sections and natural:
+            sections[account.type].append({
+                "account_code": account.code,
+                "account_name": account.name,
+                "amount": natural,
+            })
+            totals[account.type] += natural
+        elif account.type == AccountType.income:
+            current_earnings += natural
+        elif account.type == AccountType.expense:
+            current_earnings -= natural
+    current_earnings = quantize_money(current_earnings)
+    if current_earnings:
+        sections[AccountType.equity].append({
+            "account_code": "CURRENT",
+            "account_name": "Current period earnings",
+            "amount": current_earnings,
+        })
+        totals[AccountType.equity] += current_earnings
+    total_assets = quantize_money(totals[AccountType.asset])
+    total_liabilities = quantize_money(totals[AccountType.liability])
+    total_equity = quantize_money(totals[AccountType.equity])
+    return {
+        "as_of": as_of,
+        "assets": sections[AccountType.asset],
+        "liabilities": sections[AccountType.liability],
+        "equity": sections[AccountType.equity],
+        "total_assets": total_assets,
+        "total_liabilities": total_liabilities,
+        "total_equity": total_equity,
+        "liabilities_and_equity": quantize_money(total_liabilities + total_equity),
+    }
+
+
+def cash_flow(session: Session, date_from: date, date_to: date) -> Dict:
+    if date_from > date_to:
+        raise FinanceError("date_from cannot be after date_to")
+    bank = account_by_code(session, ACC_BANK)
+    if bank is None:
+        raise FinanceError("Bank account is not configured")
+    lines = session.exec(
+        select(JournalLine, JournalEntry)
+        .join(JournalEntry, JournalEntry.id == JournalLine.journal_entry_id)
+        .where(
+            JournalLine.account_id == bank.id,
+            JournalEntry.status == JournalStatus.posted,
+            or_(JournalEntry.entry_date >= date_from, JournalEntry.entry_date.is_(None)),
+            or_(JournalEntry.entry_date <= date_to, JournalEntry.entry_date.is_(None)),
+        )
+    ).all()
+    buckets = {"operating": Decimal("0"), "investing": Decimal("0"), "financing": Decimal("0")}
+    for line, entry in lines:
+        text = f"{entry.memo or ''} {line.description or ''}".lower()
+        bucket = "operating"
+        if any(word in text for word in ("equipment", "machinery", "asset purchase", "investment")):
+            bucket = "investing"
+        elif any(word in text for word in ("loan", "capital", "dividend", "equity")):
+            bucket = "financing"
+        buckets[bucket] += line.debit - line.credit
+    for key in buckets:
+        buckets[key] = quantize_money(buckets[key])
+    return {
+        "date_from": date_from,
+        "date_to": date_to,
+        **buckets,
+        "net_change": quantize_money(sum(buckets.values(), Decimal("0"))),
     }

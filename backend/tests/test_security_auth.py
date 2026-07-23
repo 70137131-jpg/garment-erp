@@ -5,7 +5,7 @@ from sqlmodel import select
 from app.kernel.rbac import Role, get_current_principal
 from app.config import settings
 from app.security.models import AuthSession, SecurityAuditEvent, User, UserRole
-from app.security.service import hash_password
+from app.security.service import create_session, hash_password, verify_password
 from app.kernel.audit import utcnow
 
 
@@ -89,6 +89,52 @@ def test_admin_can_create_user_and_duplicate_email_is_rejected(client):
     assert response.status_code == 201, response.text
     assert response.json()["roles"] == ["planner"]
     assert client.post("/auth/users", json=payload).status_code == 409
+
+
+def test_admin_password_reset_revokes_sessions_and_forces_rotation(client, session):
+    user = _user(session)
+    create_session(session, user.id, "127.0.0.1", "test browser")
+    session.commit()
+    temporary = "Temporary-Recovery-Passphrase-2026"
+
+    response = client.post(
+        f"/auth/users/{user.id}/reset-password",
+        json={"temporary_password": temporary},
+    )
+    assert response.status_code == 204, response.text
+    session.refresh(user)
+    assert verify_password(user.password_hash, temporary)
+    assert user.must_change_password is True
+    auth_session = session.exec(
+        select(AuthSession).where(AuthSession.user_id == user.id)
+    ).one()
+    assert auth_session.revoked_at is not None
+    event = session.exec(
+        select(SecurityAuditEvent).where(
+            SecurityAuditEvent.event_type == "admin_password_reset"
+        )
+    ).one()
+    assert event.target_user_id == user.id
+
+
+def test_admin_can_list_and_revoke_sessions_and_view_audit(client, session):
+    user = _user(session)
+    create_session(session, user.id, "10.0.0.5", "test browser")
+    session.commit()
+    auth_session = session.exec(
+        select(AuthSession).where(AuthSession.user_id == user.id)
+    ).one()
+
+    listed = client.get("/auth/sessions", params={"user_id": user.id})
+    assert listed.status_code == 200
+    assert listed.json()[0]["ip_address"] == "10.0.0.5"
+    revoked = client.post(f"/auth/sessions/{auth_session.id}/revoke")
+    assert revoked.status_code == 204
+    session.refresh(auth_session)
+    assert auth_session.revoked_at is not None
+
+    events = client.get("/auth/audit-events", params={"user_id": user.id}).json()
+    assert events[0]["event_type"] == "admin_session_revoked"
 
 
 def test_last_active_admin_cannot_be_disabled(client, session):
