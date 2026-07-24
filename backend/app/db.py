@@ -1,15 +1,34 @@
+from sqlalchemy.engine import Engine
 from sqlmodel import SQLModel, Session, create_engine
 
 from .config import settings
 from .kernel.context import set_current_session
 
-connect_args = (
-    {"check_same_thread": False}
-    if settings.database_url.startswith("sqlite")
-    else {}
-)
 
-engine = create_engine(settings.database_url, echo=False, connect_args=connect_args)
+def build_engine(database_url: str) -> Engine:
+    """Create the app engine with dialect-specific safety settings.
+
+    PostgreSQL connections are pinned to UTC: the app writes aware-UTC
+    datetimes into ``timestamp without time zone`` columns, and Postgres
+    converts those using the *session* time zone. Without this pin, a database
+    server in any non-UTC zone silently skews every session expiry, lockout,
+    and audit timestamp.
+    """
+    if database_url.startswith("sqlite"):
+        return create_engine(
+            database_url, echo=False, connect_args={"check_same_thread": False}
+        )
+    if database_url.startswith("postgresql"):
+        return create_engine(
+            database_url,
+            echo=False,
+            pool_pre_ping=True,
+            connect_args={"options": "-c timezone=utc"},
+        )
+    return create_engine(database_url, echo=False)
+
+
+engine = build_engine(settings.database_url)
 
 
 def init_db() -> None:

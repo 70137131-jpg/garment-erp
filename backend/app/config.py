@@ -1,20 +1,43 @@
+from pathlib import Path
 from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _read_version() -> str:
+    """Release version from the repo-root VERSION file (baked into images)."""
+    for candidate in (
+        Path(__file__).resolve().parent.parent / "VERSION",
+        Path(__file__).resolve().parent.parent.parent / "VERSION",
+    ):
+        if candidate.is_file():
+            return candidate.read_text().strip()
+    return "0.0.0-dev"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_name: str = "Garment ERP"
+    app_version: str = _read_version()
     environment: Literal["development", "test", "production"] = "development"
+
+    # Observability. JSON logs are what container platforms expect; console
+    # is friendlier for local dev. Sentry stays off until a DSN is provided.
+    log_level: str = "INFO"
+    log_format: Literal["json", "console"] = "console"
+    sentry_dsn: str | None = None
+    sentry_traces_sample_rate: float = 0.0
     # SQLite by default for zero-friction local dev; use Postgres in production,
     # e.g. postgresql+psycopg://user:pass@host/garment_erp
     database_url: str = "sqlite:///./garment_erp.db"
     auto_create_schema: bool = True
     enable_api_docs: bool = True
     max_request_body_bytes: int = 2 * 1024 * 1024
+    # File attachments (larger than the JSON body cap; enforced on /attachments).
+    max_upload_bytes: int = 10 * 1024 * 1024
+    attachments_dir: str = "./attachments"
 
     # CORS origins allowed to call the API (the SPA dev server by default).
     # Comma-separated in the env var, e.g. "http://localhost:5173,https://erp.acme.com".

@@ -61,7 +61,10 @@ def upgrade() -> None:
 
     op.execute("""
         CREATE OR REPLACE FUNCTION erp_reject_immutable_mutation() RETURNS trigger AS $$
-        BEGIN RAISE EXCEPTION 'Immutable record: % is append-only', TG_TABLE_NAME; END;
+        BEGIN
+            RAISE EXCEPTION 'Immutable record: % is append-only', TG_TABLE_NAME
+                USING ERRCODE = '23000';
+        END;
         $$ LANGUAGE plpgsql;
     """)
     op.execute("""
@@ -78,7 +81,8 @@ def upgrade() -> None:
                AND OLD.created_at IS NOT DISTINCT FROM NEW.created_at
                AND OLD.created_by IS NOT DISTINCT FROM NEW.created_by
             THEN RETURN NEW; END IF;
-            RAISE EXCEPTION 'Immutable record: journal_entry may only be marked reversed';
+            RAISE EXCEPTION 'Immutable record: journal_entry may only be marked reversed'
+                USING ERRCODE = '23000';
         END;
         $$ LANGUAGE plpgsql;
     """)

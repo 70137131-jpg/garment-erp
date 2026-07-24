@@ -139,6 +139,11 @@ def test_admin_can_list_and_revoke_sessions_and_view_audit(client, session):
 
 def test_last_active_admin_cannot_be_disabled(client, session):
     admin = _user(session, "admin@example.com", Role.admin)
+    # Deactivate the fixture administrator so `admin` is the last one standing.
+    fixture_admin = session.exec(select(User).where(User.email == "admin@test.local")).one()
+    fixture_admin.is_active = False
+    session.add(fixture_admin)
+    session.commit()
     response = client.patch(f"/auth/users/{admin.id}", json={"is_active": False})
     assert response.status_code == 409
 

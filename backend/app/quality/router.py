@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -97,7 +98,11 @@ def list_four_point_inspections(
     session: Session = Depends(get_session),
 ):
     offset, limit = page_bounds(offset, limit)
-    stmt = select(FourPointInspection).order_by(FourPointInspection.id.desc())
+    stmt = (
+        select(FourPointInspection)
+        .options(selectinload(FourPointInspection.defects))
+        .order_by(FourPointInspection.id.desc())
+    )
     if result is not None:
         stmt = stmt.where(FourPointInspection.result == result)
     if roll_id is not None:
@@ -280,7 +285,9 @@ def defect_analytics(session: Session = Depends(get_session)):
 @router.get("/inspections/export")
 def export_inspections(session: Session = Depends(get_session)):
     rows = []
-    for inspection in session.exec(select(FourPointInspection)).all():
+    for inspection in session.exec(
+        select(FourPointInspection).options(selectinload(FourPointInspection.defects))
+    ).all():
         rows.append({
             "number": inspection.inspection_number,
             "type": "four_point",

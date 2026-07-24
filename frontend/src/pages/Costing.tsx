@@ -78,10 +78,10 @@ export default function Costing() {
                     <dt>Material</dt><dd>{money(cs.material_cost, cs.currency)}</dd>
                     <dt>Sewing (SAM)</dt><dd>{money(cs.sewing_cost, cs.currency)}</dd>
                     <dt>Overhead</dt><dd>{money(cs.overhead_cost, cs.currency)}</dd>
-                    <dt style={{ fontWeight: 700 }}>Total cost</dt><dd style={{ fontWeight: 700 }}>{money(cs.total_cost, cs.currency)}</dd>
+                    <dt style={{ fontWeight: 600 }}>Total cost</dt><dd style={{ fontWeight: 600 }}>{money(cs.total_cost, cs.currency)}</dd>
                     <dt>Margin</dt><dd>{pct((parseFloat(cs.margin_pct) * 100).toString())} · {money(cs.margin_amount, cs.currency)}</dd>
                     <dt style={{ color: "var(--indigo-deep)" }}>Selling price</dt>
-                    <dd style={{ fontWeight: 700, color: "var(--indigo-deep)", fontSize: 16 }}>{money(cs.selling_price, cs.currency)}</dd>
+                    <dd style={{ fontWeight: 600, color: "var(--indigo-deep)", fontSize: 16 }}>{money(cs.selling_price, cs.currency)}</dd>
                   </dl>
                 </div>
               </div>

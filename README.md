@@ -114,6 +114,44 @@ centrally managed accounts. The SPA uses an HttpOnly, SameSite session cookie;
 roles cannot be selected or asserted by the browser. Administrators manage
 accounts and role assignments from **Access Control**.
 
+## Deployment & operations
+
+The whole stack ships as Docker Compose (Postgres + API + SPA + scheduled
+backups). Version is tracked in [`VERSION`](VERSION) and changes in
+[`CHANGELOG.md`](CHANGELOG.md); `GET /health` reports the running version and
+database status, and `GET /ready` gates traffic on the schema being at the
+expected migration head.
+
+```bash
+cp .env.example .env       # set POSTGRES_PASSWORD + bootstrap admin credentials
+docker compose up -d       # SPA on http://localhost:8080, migrations run on boot
+```
+
+Internet-facing deployment (automatic HTTPS via Caddy — set `DOMAIN` in `.env`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+Operations:
+
+- **Backups** — the `backup` service runs `pg_dump` on a schedule into
+  `./backups/` (`BACKUP_INTERVAL_HOURS`, `BACKUP_RETENTION_DAYS`); manual
+  `./scripts/backup.sh` and `./scripts/restore.sh <dump>` are provided. Copy
+  backups off the machine. An untested backup is not a backup.
+- **Upgrades** — `./scripts/upgrade.sh` takes a pre-upgrade backup, rebuilds
+  images, rolls the stack, and waits for `/ready`.
+- **Logging** — structured JSON logs (`LOG_FORMAT=json`) with a request ID on
+  every line; the same ID is returned to clients as `X-Request-ID` and inside
+  error responses. Optional Sentry via `SENTRY_DSN`.
+- **Demo data** — `python -m app.seed_demo` seeds a realistic factory
+  (refuses production environments and non-empty databases).
+- **Onboarding imports** — admin-only CSV imports for customers, suppliers,
+  materials, and opening stock at `/imports/*` with dry-run validation
+  reports and downloadable templates (`/imports/templates/{kind}`).
+- **Attachments** — files attach to materials, customers, suppliers, styles,
+  and orders; stored under `ATTACHMENTS_DIR` (a named volume in Compose).
+
 ## Database migrations (production)
 
 Local dev auto-creates tables on startup. Production uses Alembic against

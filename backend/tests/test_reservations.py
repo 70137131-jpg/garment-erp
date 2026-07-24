@@ -5,7 +5,7 @@ from app.inventory.service import reserve, roll_available_qty, select_rolls
 from app.inventory.models import ReserveRequest
 from app.inventory.service import post_movement
 from app.inventory.models import MovementType
-from tests.factories import make_fabric
+from tests.factories import make_customer, make_fabric
 
 
 def _stock_roll(session, mat, number, length, *, shade="SG-A", grade=Grade.A, width="150",
@@ -60,12 +60,17 @@ def test_selection_respects_grade_priority(client, session):
 
 def test_selection_excludes_customer_restricted_rolls(client, session):
     mat = make_fabric(client)
+    ordering_customer = make_customer(client, name="Ordering Co")
+    other_customer = make_customer(client, name="Other Brand")
     _stock_roll(session, mat, "R-OPEN", "30")
-    _stock_roll(session, mat, "R-LOCKED", "200", restricted=999)
+    _stock_roll(session, mat, "R-LOCKED", "200", restricted=other_customer)
     session.commit()
     # 30 open + a roll locked to another customer → cannot meet 50.
     try:
-        select_rolls(session, ReserveRequest(material_id=mat, required_qty=Decimal("50"), customer_id=1))
+        select_rolls(
+            session,
+            ReserveRequest(material_id=mat, required_qty=Decimal("50"), customer_id=ordering_customer),
+        )
         assert False
     except Exception as exc:
         assert "Insufficient" in str(exc)

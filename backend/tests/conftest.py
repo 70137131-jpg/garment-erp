@@ -1,24 +1,62 @@
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-from app.db import get_session
+from app.db import build_engine, get_session
 from app.kernel.context import reset_current_session, set_current_session
 from app.kernel.rbac import Principal, Role, get_current_principal
 from app.main import app
 
+# Default: fresh in-memory SQLite per test (fast, zero setup). CI also runs
+# the whole suite against PostgreSQL — the production dialect — by setting
+#   TEST_DATABASE_URL=postgresql+psycopg://user:pass@host:5432/dbname
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
 
-@pytest.fixture(name="session")
-def session_fixture():
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    SQLModel.metadata.create_all(engine)
-    with Session(engine) as session:
-        yield session
+
+if TEST_DATABASE_URL:
+    from app.kernel.immutability import install_immutable_record_guards
+
+    @pytest.fixture(name="_shared_engine", scope="session")
+    def shared_engine_fixture():
+        engine = build_engine(TEST_DATABASE_URL)
+        SQLModel.metadata.drop_all(engine)
+        SQLModel.metadata.create_all(engine)
+        # Production schemas carry these guards via migrations; installing
+        # them here keeps Postgres test behavior faithful to production.
+        install_immutable_record_guards(engine)
+        yield engine
+        engine.dispose()
+
+    @pytest.fixture(name="session")
+    def session_fixture(_shared_engine):
+        # Transaction-per-test isolation: the session joins an outer
+        # transaction via savepoints, so its commits stay invisible to other
+        # tests and everything rolls back at the end.
+        connection = _shared_engine.connect()
+        transaction = connection.begin()
+        session = Session(connection, join_transaction_mode="create_savepoint")
+        try:
+            yield session
+        finally:
+            session.close()
+            transaction.rollback()
+            connection.close()
+
+else:
+
+    @pytest.fixture(name="session")
+    def session_fixture():
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        SQLModel.metadata.create_all(engine)
+        with Session(engine) as session:
+            yield session
 
 
 @pytest.fixture(name="client")
@@ -32,10 +70,24 @@ def client_fixture(session: Session):
     # Domain tests run as an authenticated administrator. Security behavior is
     # covered explicitly in test_rbac_audit.py; keeping auth out of unrelated
     # fixtures makes their business assertions focused and deterministic.
-    app.dependency_overrides[get_current_principal] = lambda: Principal(
-        user_id=1,
+    # The user must genuinely exist: audit events and role grants carry
+    # foreign keys to app_user, which PostgreSQL enforces.
+    from app.security.models import User, UserRole
+
+    admin_user = User(
         email="admin@test.local",
         display_name="Test Administrator",
+        password_hash="!test-fixture-no-login",
+        must_change_password=False,
+    )
+    session.add(admin_user)
+    session.flush()
+    session.add(UserRole(user_id=admin_user.id, role=Role.admin.value, granted_by=admin_user.id))
+    session.commit()
+    app.dependency_overrides[get_current_principal] = lambda: Principal(
+        user_id=admin_user.id,
+        email=admin_user.email,
+        display_name=admin_user.display_name,
         roles=frozenset({Role.admin}),
         session_id=1,
     )

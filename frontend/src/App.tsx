@@ -1,22 +1,25 @@
-import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { FormEvent, ReactNode, Suspense, lazy, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { ApiError, AuthUser, auth } from "./api/client";
 import { AuthorizationProvider } from "./auth/Authorization";
 import { Shell } from "./components/Shell";
 import { Spinner } from "./components/ui";
-import Costing from "./pages/Costing";
-import Dashboard from "./pages/Dashboard";
-import Finance from "./pages/Finance";
-import Inventory from "./pages/Inventory";
-import Masters from "./pages/Masters";
-import Procurement from "./pages/Procurement";
-import Production from "./pages/Production";
-import Quality from "./pages/Quality";
-import Sales from "./pages/Sales";
-import SalesDetail from "./pages/SalesDetail";
-import StyleDetail from "./pages/StyleDetail";
-import Styles from "./pages/Styles";
-import Users from "./pages/Users";
+
+// Route-level code splitting: each workspace page ships as its own chunk, so
+// first paint only loads the shell + the page being visited.
+const Costing = lazy(() => import("./pages/Costing"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Finance = lazy(() => import("./pages/Finance"));
+const Inventory = lazy(() => import("./pages/Inventory"));
+const Masters = lazy(() => import("./pages/Masters"));
+const Procurement = lazy(() => import("./pages/Procurement"));
+const Production = lazy(() => import("./pages/Production"));
+const Quality = lazy(() => import("./pages/Quality"));
+const Sales = lazy(() => import("./pages/Sales"));
+const SalesDetail = lazy(() => import("./pages/SalesDetail"));
+const StyleDetail = lazy(() => import("./pages/StyleDetail"));
+const Styles = lazy(() => import("./pages/Styles"));
+const Users = lazy(() => import("./pages/Users"));
 
 function AuthLayout({ children }: { children: ReactNode }) {
   return (
@@ -156,6 +159,7 @@ export default function App() {
   return (
     <AuthorizationProvider user={user}>
       <Shell user={user} onLogout={async () => { try { await auth.logout(); } finally { setUser(null); } }}>
+        <Suspense fallback={<Spinner />}>
         <Routes>
           <Route path="/" element={<Dashboard permissions={user.permissions} />} />
           <Route path="/masters" element={permit("masters:read", <Masters />)} />
@@ -172,6 +176,7 @@ export default function App() {
           {user.permissions.includes("users:manage") && <Route path="/users" element={<Users />} />}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </Shell>
     </AuthorizationProvider>
   );

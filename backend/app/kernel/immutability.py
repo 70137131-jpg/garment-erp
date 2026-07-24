@@ -7,7 +7,7 @@ the same protection for local development.
 """
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 
 _SQLITE_GUARDS = (
@@ -70,7 +70,10 @@ _POSTGRES_FUNCTION = """
 CREATE OR REPLACE FUNCTION erp_reject_immutable_mutation()
 RETURNS trigger AS $$
 BEGIN
-    RAISE EXCEPTION 'Immutable record: % is append-only', TG_TABLE_NAME;
+    -- ERRCODE 23000 (integrity_constraint_violation) so drivers surface this
+    -- as an IntegrityError, matching the SQLite guard behavior.
+    RAISE EXCEPTION 'Immutable record: % is append-only', TG_TABLE_NAME
+        USING ERRCODE = '23000';
 END;
 $$ LANGUAGE plpgsql;
 """
@@ -92,25 +95,36 @@ BEGIN
     THEN
         RETURN NEW;
     END IF;
-    RAISE EXCEPTION 'Immutable record: journal_entry may only be marked reversed';
+    RAISE EXCEPTION 'Immutable record: journal_entry may only be marked reversed'
+        USING ERRCODE = '23000';
 END;
 $$ LANGUAGE plpgsql;
 """
 
 
-def install_immutable_record_guards(engine: Engine) -> None:
+def install_immutable_record_guards(bind: Engine | Connection) -> None:
     """Install idempotent guards for development databases.
 
     Production uses the matching Alembic migration.  This path keeps local
-    ``create_all`` databases protected as well.
+    ``create_all`` databases protected as well.  Accepts an Engine (owns its
+    own transaction) or a Connection whose transaction the caller manages —
+    the latter lets transactional test fixtures install guards that roll back
+    with the test.
     """
-    if engine.dialect.name == "sqlite":
-        with engine.begin() as connection:
-            for statement in _SQLITE_GUARDS:
-                connection.execute(text(statement))
+    if isinstance(bind, Connection):
+        _install_guards(bind, bind.dialect.name)
+        return
+    with bind.begin() as connection:
+        _install_guards(connection, bind.dialect.name)
+
+
+def _install_guards(connection: Connection, dialect: str) -> None:
+    if dialect == "sqlite":
+        for statement in _SQLITE_GUARDS:
+            connection.execute(text(statement))
         return
 
-    if engine.dialect.name != "postgresql":
+    if dialect != "postgresql":
         return
 
     triggers = (
@@ -123,17 +137,16 @@ def install_immutable_record_guards(engine: Engine) -> None:
         ("journal_entry_no_delete", "journal_entry", "BEFORE DELETE", "erp_reject_immutable_mutation"),
         ("journal_entry_limited_update", "journal_entry", "BEFORE UPDATE", "erp_allow_journal_reversal_only"),
     )
-    with engine.begin() as connection:
-        connection.execute(text(_POSTGRES_FUNCTION))
-        connection.execute(text(_POSTGRES_LIMITED_JOURNAL_UPDATE))
-        for name, table, timing, function in triggers:
-            connection.execute(text(f"""
-                DO $$ BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_trigger WHERE tgname = '{name}'
-                    ) THEN
-                        CREATE TRIGGER {name} {timing} ON {table}
-                        FOR EACH ROW EXECUTE FUNCTION {function}();
-                    END IF;
-                END $$;
-            """))
+    connection.execute(text(_POSTGRES_FUNCTION))
+    connection.execute(text(_POSTGRES_LIMITED_JOURNAL_UPDATE))
+    for name, table, timing, function in triggers:
+        connection.execute(text(f"""
+            DO $$ BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_trigger WHERE tgname = '{name}'
+                ) THEN
+                    CREATE TRIGGER {name} {timing} ON {table}
+                    FOR EACH ROW EXECUTE FUNCTION {function}();
+                END IF;
+            END $$;
+        """))

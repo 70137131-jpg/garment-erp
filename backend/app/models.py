@@ -5,6 +5,7 @@ Importing this module registers all tables on ``SQLModel.metadata``. Both
 they always see the complete schema regardless of which routers were loaded.
 """
 
+from .attachments import models as attachments_models  # noqa: F401
 from .finance import models as finance_models  # noqa: F401
 from .costing import models as costing_models  # noqa: F401
 from .inventory import models as inventory_models  # noqa: F401
@@ -17,3 +18,5 @@ from .quality import models as quality_models  # noqa: F401
 from .sales import models as sales_models  # noqa: F401
 from .security import models as security_models  # noqa: F401
 from .styles import models as styles_models  # noqa: F401
+from .tna import models as tna_models  # noqa: F401
+from .workforce import models as workforce_models  # noqa: F401

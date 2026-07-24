@@ -1,0 +1,10 @@
+.git
+.github
+**/__pycache__
+**/.venv
+**/*.db
+**/node_modules
+frontend/dist
+backups
+docs
+*.md

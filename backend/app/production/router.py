@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
+from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -104,7 +105,8 @@ def create_cut(
 
 @router.get("/cut-orders", response_model=List[CutOrderRead])
 def list_cuts(session: Session = Depends(get_session)):
-    return [_cut_read(c) for c in session.exec(select(CutOrder).order_by(CutOrder.id)).all()]
+    stmt = select(CutOrder).options(selectinload(CutOrder.sizes)).order_by(CutOrder.id)
+    return [_cut_read(c) for c in session.exec(stmt).all()]
 
 
 @router.get("/cut-orders/{cut_id}", response_model=CutOrderRead)
@@ -235,7 +237,11 @@ def create_sewing(
 
 @router.get("/sewing-orders", response_model=List[SewingOrderRead])
 def list_sewing_orders(session: Session = Depends(get_session)):
-    orders = session.exec(select(SewingOrder).order_by(SewingOrder.id.desc())).all()
+    orders = session.exec(
+        select(SewingOrder)
+        .options(selectinload(SewingOrder.daily_outputs))
+        .order_by(SewingOrder.id.desc())
+    ).all()
     return [_sewing_read(order) for order in orders]
 
 

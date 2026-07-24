@@ -26,8 +26,15 @@ class SecurityMiddleware:
         headers = Headers(scope=scope)
         content_length = headers.get("content-length")
         if content_length:
+            # File uploads get the larger attachment budget (plus multipart
+            # framing overhead); everything else keeps the strict JSON cap.
+            path = scope.get("path", "")
+            if path.startswith("/attachments"):
+                body_limit = settings.max_upload_bytes + 64 * 1024
+            else:
+                body_limit = settings.max_request_body_bytes
             try:
-                too_large = int(content_length) > settings.max_request_body_bytes
+                too_large = int(content_length) > body_limit
             except ValueError:
                 too_large = True
             if too_large:

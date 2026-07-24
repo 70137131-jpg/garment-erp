@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -302,8 +303,13 @@ def create_journal(
 @router.get("/journal-entries", response_model=List[JournalEntryRead])
 def list_journals(session: Session = Depends(get_session)):
     entries = session.exec(
-        select(JournalEntry).order_by(JournalEntry.id.desc())
+        select(JournalEntry)
+        .options(selectinload(JournalEntry.lines))
+        .order_by(JournalEntry.id.desc())
     ).all()
+    # Prime the identity map so per-line session.get(Account, ...) inside
+    # _journal_read is a dict lookup, not a query per distinct account.
+    session.exec(select(Account)).all()
     return [_journal_read(session, entry) for entry in entries]
 
 

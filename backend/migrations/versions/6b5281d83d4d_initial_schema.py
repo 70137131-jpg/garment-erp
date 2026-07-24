@@ -1056,3 +1056,16 @@ def downgrade() -> None:
 
     op.drop_table('account')
     # ### end Alembic commands ###
+
+    # Dropping the tables does not drop the native PostgreSQL ENUM types this
+    # migration created; without this, a downgrade→upgrade cycle fails with
+    # "type ... already exists". checkfirst makes it a no-op on SQLite.
+    for enum_name in (
+        'accounttype', 'bomstatus', 'costcategory', 'costsheetstatus',
+        'cutorderstatus', 'gender', 'grade', 'inspectionresult',
+        'journalsource', 'journalstatus', 'materialtype', 'movementtype',
+        'purchaseorderstatus', 'reservationstatus', 'rollstatus',
+        'salesorderstatus', 'settlementstatus', 'sewingorderstatus',
+        'stylestatus', 'subcontractstatus',
+    ):
+        sa.Enum(name=enum_name).drop(op.get_bind(), checkfirst=True)

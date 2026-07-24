@@ -158,7 +158,7 @@ def test_material_requirements_calc(client, session):
     sr = _make_size_range(client)
     style_id = _make_style(client, sr)
     fabric = _make_fabric(client)
-    client.post(
+    created = client.post(
         f"/styles/{style_id}/bom-versions",
         json={
             "lines": [
@@ -174,8 +174,8 @@ def test_material_requirements_calc(client, session):
                 }
             ]
         },
-    )
-    version = current_bom_version(session, style_id) or session.get(BomVersion, 1)
+    ).json()
+    version = current_bom_version(session, style_id) or session.get(BomVersion, created["id"])
 
     # 10 S + 20 M + 0 L + 5 XL = 10*1.0 + 20*1.2 + 5*1.6 = 42.0, +5% wastage = 44.1
     reqs = material_requirements(session, version, {"S": 10, "M": 20, "XL": 5})

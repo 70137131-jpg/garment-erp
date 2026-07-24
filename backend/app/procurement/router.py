@@ -4,6 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
+from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -147,7 +148,8 @@ def list_pos(
     }
     if sort not in sort_fields or direction not in ("asc", "desc"):
         raise HTTPException(status_code=422, detail="Invalid sort field or direction")
-    stmt = select(PurchaseOrder)
+    # Eager-load lines: one page serializes in two queries, not 1 + N.
+    stmt = select(PurchaseOrder).options(selectinload(PurchaseOrder.lines))
     if q:
         stmt = stmt.where(func.lower(PurchaseOrder.order_number).like(f"%{q.strip().lower()}%"))
     if status is not None:
@@ -181,12 +183,17 @@ def export_purchase_orders(session: Session = Depends(get_session)):
     )
 
 
-def _requisition_read(session: Session, requisition: PurchaseRequisition) -> PurchaseRequisitionRead:
-    lines = session.exec(
-        select(PurchaseRequisitionLine)
-        .where(PurchaseRequisitionLine.purchase_requisition_id == requisition.id)
-        .order_by(PurchaseRequisitionLine.id)
-    ).all()
+def _requisition_read(
+    session: Session,
+    requisition: PurchaseRequisition,
+    lines: Optional[List[PurchaseRequisitionLine]] = None,
+) -> PurchaseRequisitionRead:
+    if lines is None:
+        lines = session.exec(
+            select(PurchaseRequisitionLine)
+            .where(PurchaseRequisitionLine.purchase_requisition_id == requisition.id)
+            .order_by(PurchaseRequisitionLine.id)
+        ).all()
     return PurchaseRequisitionRead(
         id=requisition.id,
         requisition_number=requisition.requisition_number,
@@ -255,7 +262,23 @@ def list_requisitions(
         stmt = stmt.where(PurchaseRequisition.status == status)
     if sales_order_id is not None:
         stmt = stmt.where(PurchaseRequisition.sales_order_id == sales_order_id)
-    return [_requisition_read(session, requisition) for requisition in session.exec(stmt).all()]
+    requisitions = session.exec(stmt).all()
+    # Batch the line fetch: one IN query for the whole page instead of one per row.
+    lines_by_requisition: dict[int, List[PurchaseRequisitionLine]] = {}
+    if requisitions:
+        fetched = session.exec(
+            select(PurchaseRequisitionLine)
+            .where(PurchaseRequisitionLine.purchase_requisition_id.in_(
+                [requisition.id for requisition in requisitions]
+            ))
+            .order_by(PurchaseRequisitionLine.id)
+        ).all()
+        for line in fetched:
+            lines_by_requisition.setdefault(line.purchase_requisition_id, []).append(line)
+    return [
+        _requisition_read(session, requisition, lines=lines_by_requisition.get(requisition.id, []))
+        for requisition in requisitions
+    ]
 
 
 @router.get("/purchase-requisitions/{requisition_id}", response_model=PurchaseRequisitionRead)
@@ -455,7 +478,9 @@ def create_goods_receipt(
 @router.get("/goods-receipts", response_model=List[GoodsReceiptRead])
 def list_goods_receipts(session: Session = Depends(get_session)):
     receipts = session.exec(
-        select(GoodsReceipt).order_by(GoodsReceipt.id.desc())
+        select(GoodsReceipt)
+        .options(selectinload(GoodsReceipt.rolls))
+        .order_by(GoodsReceipt.id.desc())
     ).all()
     return [_gr_read(session, receipt) for receipt in receipts]
 

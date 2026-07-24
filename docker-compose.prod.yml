@@ -1,0 +1,33 @@
+# Production override: hardened backend settings + Caddy for automatic HTTPS.
+# Requires DOMAIN (public hostname pointing at this machine) in .env.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+services:
+  backend:
+    environment:
+      ENVIRONMENT: production
+      ENABLE_API_DOCS: "false"
+      SESSION_COOKIE_SECURE: "true"
+      CORS_ORIGINS: https://${DOMAIN:?set DOMAIN in .env}
+      ALLOWED_HOSTS: ${DOMAIN}
+
+  frontend:
+    ports: !override []
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./scripts/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  caddy_data:
+  caddy_config:

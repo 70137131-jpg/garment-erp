@@ -6,15 +6,32 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from sqlmodel import select
+
 from tests.factories import make_fabric, make_size_range, make_supplier
+from app.db import get_session
 from app.kernel.rbac import Principal, Role, get_current_principal
 from app.kernel.immutability import install_immutable_record_guards
-from app.security.models import SecurityAuditEvent
+from app.security.models import SecurityAuditEvent, User
 
 
 def _act_as(client, *roles: Role):
+    # The operator must exist as a real row: denial audit events reference
+    # app_user by foreign key, which PostgreSQL enforces.
+    session = client.app.dependency_overrides[get_session]()
+    user = session.exec(select(User).where(User.email == "operator@test.local")).first()
+    if user is None:
+        user = User(
+            email="operator@test.local",
+            display_name="Test Operator",
+            password_hash="!test-fixture-no-login",
+            must_change_password=False,
+        )
+        session.add(user)
+        session.flush()
+    user_id = user.id
     client.app.dependency_overrides[get_current_principal] = lambda: Principal(
-        user_id=10,
+        user_id=user_id,
         email="operator@test.local",
         display_name="Test Operator",
         roles=frozenset(roles),

@@ -4,6 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
+from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -18,6 +19,7 @@ from .models import (
     SalesOrderCancelRequest,
     SalesOrderCloseRequest,
     SalesOrderCreate,
+    SalesOrderLine,
     SalesOrderLineRead,
     SalesOrderMaterialRequirement,
     MaterialRequirementRead,
@@ -185,7 +187,11 @@ def list_orders(
     }
     if sort not in sort_fields or direction not in ("asc", "desc"):
         raise HTTPException(status_code=422, detail="Invalid sort field or direction")
-    stmt = select(SalesOrder)
+    # Eager-load lines and size cells: serializing a page of orders is three
+    # queries instead of 1 + N(lines) + N×M(cells).
+    stmt = select(SalesOrder).options(
+        selectinload(SalesOrder.lines).selectinload(SalesOrderLine.cells)
+    )
     if q:
         pattern = f"%{q.strip().lower()}%"
         stmt = stmt.where(
@@ -204,7 +210,11 @@ def list_orders(
 
 @router.get("/export")
 def export_orders(session: Session = Depends(get_session)):
-    orders = session.exec(select(SalesOrder).order_by(SalesOrder.id.desc())).all()
+    orders = session.exec(
+        select(SalesOrder)
+        .options(selectinload(SalesOrder.lines).selectinload(SalesOrderLine.cells))
+        .order_by(SalesOrder.id.desc())
+    ).all()
     rows = []
     for order in orders:
         data = _serialize(order)

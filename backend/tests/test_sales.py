@@ -100,3 +100,20 @@ def test_size_outside_style_range_rejected(client):
         },
     )
     assert r.status_code == 422
+
+
+def test_list_and_export_orders_with_lines(client):
+    """Regression: the eager-loaded list/export paths serialize lines and cells."""
+    client.post("/sales-orders", json=_order_payload(client))
+
+    listed = client.get("/sales-orders")
+    assert listed.status_code == 200, listed.text
+    orders = listed.json()
+    assert len(orders) == 1
+    assert len(orders[0]["lines"]) == 2
+    assert orders[0]["total_quantity"] == 700
+    assert {cell["size_label"] for cell in orders[0]["lines"][0]["sizes"]} == {"S", "M", "L", "XL"}
+
+    exported = client.get("/sales-orders/export")
+    assert exported.status_code == 200
+    assert "PO-778" in exported.text

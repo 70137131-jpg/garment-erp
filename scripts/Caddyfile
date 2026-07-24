@@ -1,0 +1,5 @@
+# Automatic HTTPS via Let's Encrypt for the compose production override.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy frontend:80
+}

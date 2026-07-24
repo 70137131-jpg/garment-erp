@@ -2,6 +2,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -156,7 +157,7 @@ def create_size_range(payload: SizeRangeCreate, session: Session = Depends(get_s
 
 @router.get("/size-ranges", response_model=List[SizeRangeRead])
 def list_size_ranges(session: Session = Depends(get_session)):
-    ranges = session.exec(select(SizeRange)).all()
+    ranges = session.exec(select(SizeRange).options(selectinload(SizeRange.sizes))).all()
     return [_size_range_read(r) for r in ranges]
 
 
@@ -252,7 +253,9 @@ def create_supplier(payload: SupplierCreate, session: Session = Depends(get_sess
 
 @router.get("/suppliers", response_model=List[SupplierRead])
 def list_suppliers(session: Session = Depends(get_session)):
-    suppliers = session.exec(select(Supplier)).all()
+    suppliers = session.exec(
+        select(Supplier).options(selectinload(Supplier.material_types))
+    ).all()
     return [_supplier_read(s) for s in suppliers]
 
 
