@@ -2,13 +2,34 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#000000" />
     <meta name="description" content="Atelier garment manufacturing operations workspace" />
     <title>Atelier | Garment ERP</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Fraunces:opsz,wght@9..144,500&display=swap" rel="stylesheet" />
+    <script>
+      /* Applies the saved theme before first paint so the app never flashes the
+         wrong canvas. Mirrors src/theme/ThemeProvider.tsx — keep both in step. */
+      (function () {
+        try {
+          var stored = localStorage.getItem("erp:theme");
+          var resolved =
+            stored === "light" || stored === "dark"
+              ? stored
+              : window.matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark";
+          document.documentElement.setAttribute("data-theme", resolved);
+          document
+            .querySelector('meta[name="theme-color"]')
+            .setAttribute("content", resolved === "light" ? "#ffffff" : "#000000");
+        } catch (e) {
+          /* Storage blocked — the stylesheet default (dark) still applies. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
