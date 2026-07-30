@@ -2,7 +2,7 @@
 
 A single source of truth for a garment manufacturing business — see
 [`docs/blueprint.md`](docs/blueprint.md) for the full functional blueprint and
-[`docs/build-plan.md`](docs/build-plan.md) for the phased build plan.
+[`docs/08-Improvement-Plan.md`](docs/08-Improvement-Plan.md) for the phased improvement plan.
 
 Stack: **FastAPI + SQLModel + Alembic** backend, **React + Vite + TypeScript**
 frontend (SQLite for local dev, Postgres in production). Money and quantities are

@@ -9,7 +9,7 @@ from sqlmodel import Session, select
 from ..db import get_session
 from ..inventory.models import ReserveRequest
 from ..inventory.service import StockError, reserve
-from ..kernel.idempotency import find_existing, record
+from ..kernel.idempotency import IdempotencyInProgress, claim, complete
 from ..kernel.numbering import next_document_number
 from ..kernel.query import csv_download, page_bounds
 from ..kernel.rbac import Role, require_roles
@@ -268,17 +268,21 @@ def record_output(
     if sewing is None:
         raise HTTPException(status_code=404, detail="Sewing order not found")
 
-    # Idempotent shop-floor capture.
+    # Claim before recording output so concurrent client retries are safe.
+    idempotency_key = None
     if payload.client_key:
-        existing = find_existing(session, _OUTPUT_SCOPE, payload.client_key)
-        if existing is not None:
-            output = session.get(SewingDailyOutput, existing)
+        try:
+            idempotency_key = claim(session, _OUTPUT_SCOPE, payload.client_key)
+        except IdempotencyInProgress as exc:
+            raise HTTPException(status_code=409, detail="Idempotent request is in progress") from exc
+        if idempotency_key.resource_id is not None:
+            output = session.get(SewingDailyOutput, idempotency_key.resource_id)
             return output
 
     try:
         output = add_daily_output(session, sewing, payload)
-        if payload.client_key:
-            record(session, _OUTPUT_SCOPE, payload.client_key, output.id)
+        if idempotency_key is not None:
+            complete(session, idempotency_key, output.id)
     except ProductionError as exc:
         session.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc

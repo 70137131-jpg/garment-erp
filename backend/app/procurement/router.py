@@ -9,7 +9,7 @@ from sqlmodel import Session, select
 
 from ..db import get_session
 from ..inventory.models import Roll
-from ..kernel.idempotency import find_existing, record
+from ..kernel.idempotency import IdempotencyInProgress, claim, complete
 from ..kernel.numbering import next_document_number
 from ..kernel.query import csv_download, page_bounds
 from ..kernel.rbac import Role, require_roles
@@ -457,16 +457,21 @@ def create_goods_receipt(
     session: Session = Depends(get_session),
     actor: str = Depends(require_roles(Role.stores)),
 ):
-    # Idempotent capture: a replayed client_key returns the original receipt.
+    # Claim before posting so the database unique constraint serializes
+    # concurrent retries rather than letting both post stock.
+    idempotency_key = None
     if payload.client_key:
-        existing = find_existing(session, _GR_SCOPE, payload.client_key)
-        if existing is not None:
-            receipt = session.get(GoodsReceipt, existing)
+        try:
+            idempotency_key = claim(session, _GR_SCOPE, payload.client_key)
+        except IdempotencyInProgress as exc:
+            raise HTTPException(status_code=409, detail="Idempotent request is in progress") from exc
+        if idempotency_key.resource_id is not None:
+            receipt = session.get(GoodsReceipt, idempotency_key.resource_id)
             return _gr_read(session, receipt)
     try:
         receipt = post_goods_receipt(session, payload, actor)
-        if payload.client_key:
-            record(session, _GR_SCOPE, payload.client_key, receipt.id)
+        if idempotency_key is not None:
+            complete(session, idempotency_key, receipt.id)
     except ProcurementError as exc:
         session.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
