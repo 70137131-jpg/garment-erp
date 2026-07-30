@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { AuthUser } from "../api/client";
+import { AccountMenu } from "./AccountMenu";
 
 interface NavItem {
   to: string;
@@ -71,18 +72,9 @@ function crumbFor(path: string): string {
     masters: "Master Data",
     finance: "Finance",
     users: "Access Control",
+    settings: "Settings",
   };
   return labels[segment] ?? segment;
-}
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase();
 }
 
 export function Shell({ children, user, onLogout }: { children: ReactNode; user: AuthUser; onLogout: () => void }) {
@@ -111,13 +103,13 @@ export function Shell({ children, user, onLogout }: { children: ReactNode; user:
 
       <aside className="sidebar" aria-label="Primary navigation">
         <div className="brand">
-          <div className="mark" aria-label="Atelier Garment ERP">
+          <Link className="mark" to="/" aria-label="Atelier Garment ERP — go to dashboard">
             <div className="brand-symbol" aria-hidden="true"><span /></div>
             <div>
               <div className="name">Atelier</div>
               <div className="sub">Garment ERP</div>
             </div>
-          </div>
+          </Link>
           <button className="sidebar-close" type="button" aria-label="Close navigation" onClick={() => setMenuOpen(false)}>
             Close
           </button>
@@ -163,11 +155,7 @@ export function Shell({ children, user, onLogout }: { children: ReactNode; user:
         </nav>
 
         <div className="sidebar-user">
-          <div className="avatar" aria-hidden="true">{initials(user.display_name)}</div>
-          <div className="sidebar-user-copy">
-            <strong>{user.display_name}</strong>
-            <span>{user.email}</span>
-          </div>
+          <AccountMenu user={user} onLogout={onLogout} placement="up" />
         </div>
       </aside>
 
@@ -192,12 +180,7 @@ export function Shell({ children, user, onLogout }: { children: ReactNode; user:
           <div className="topbar-right">
             <div className="system-state"><span /> Workspace online</div>
             <div className="user-chip">
-              <div className="avatar small" aria-hidden="true">{initials(user.display_name)}</div>
-              <div className="user-copy">
-                <b>{user.display_name}</b>
-                <small>{user.roles.join(" / ")}</small>
-              </div>
-              <button className="btn ghost sm" type="button" onClick={onLogout}>Sign out</button>
+              <AccountMenu user={user} onLogout={onLogout} placement="down" compact />
             </div>
           </div>
         </header>
