@@ -16,7 +16,7 @@ export default function SalesDetail() {
   const { id } = useParams();
   const oid = Number(id);
   const order = useAsync(() => api.get<SalesOrder>(`/sales-orders/${oid}`), [oid]);
-  const styles = useAsync(() => api.get<Style[]>("/styles"));
+  const styles = useAsync(() => api.get<Style[]>("/styles"), [], "/styles");
   const colours = useAsync(() => api.get<Colour[]>("/masters/colours"));
   const prof = useAsync(() => api.get<Profitability>(`/costing/sales-orders/${oid}/profitability`), [oid]);
   const checks = useAsync(() => api.get<CommercialCheck>(`/sales-orders/${oid}/commercial-checks`), [oid]);

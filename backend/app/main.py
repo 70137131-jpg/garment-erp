@@ -25,13 +25,17 @@ from .finance.router import router as finance_router
 from .finance.service import seed_chart_of_accounts
 from .imports.router import router as imports_router
 from .inventory.router import router as inventory_router
+from .marker.router import router as marker_router
 from .masters.router import router as masters_router
+from .mes.router import router as mes_router
+from .planning.router import router as planning_router
 from .procurement.router import router as procurement_router
 from .production.router import router as production_router
 from .quality.router import router as quality_router
 from .sales.router import router as sales_router
 from .styles.router import router as styles_router
 from .tna.router import router as tna_router
+from .wms.router import router as wms_router
 from .workforce.router import router as workforce_router
 from .security.router import router as security_router
 from .security.service import bootstrap_admin
@@ -96,6 +100,13 @@ app.include_router(procurement_router, dependencies=[Depends(require_permissions
 app.include_router(quality_router, dependencies=[Depends(require_permissions(Permission.quality_read))])
 app.include_router(production_router, dependencies=[Depends(require_permissions(Permission.production_read))])
 app.include_router(costing_router, dependencies=[Depends(require_permissions(Permission.costing_read))])
+app.include_router(planning_router, dependencies=[Depends(require_permissions(Permission.planning_read))])
+# MES is production execution and WMS is inventory execution, so they reuse
+# those read permissions rather than inventing parallel ones. Mutations stay
+# gated per endpoint by require_roles.
+app.include_router(mes_router, dependencies=[Depends(require_permissions(Permission.production_read))])
+app.include_router(marker_router, dependencies=[Depends(require_permissions(Permission.production_read))])
+app.include_router(wms_router, dependencies=[Depends(require_permissions(Permission.inventory_read))])
 app.include_router(finance_router, dependencies=[Depends(require_permissions(Permission.finance_read))])
 app.include_router(documents_router, dependencies=[Depends(require_permissions(Permission.masters_read))])
 app.include_router(imports_router)

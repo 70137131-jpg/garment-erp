@@ -272,7 +272,7 @@ function QualityHistory() {
 
 function LabManagement() {
   const tests = useAsync(() => api.get<LabTest[]>("/quality/lab-tests"));
-  const materials = useAsync(() => api.get<Material[]>("/masters/materials"));
+  const materials = useAsync(() => api.get<Material[]>("/masters/materials"), [], "/masters/materials");
   const [open, setOpen] = useState(false);
   const toast = useToast();
   const materialName = (id: number) => materials.data?.find((material) => material.id === id)?.name ?? `#${id}`;

@@ -220,24 +220,42 @@ function Payables() {
     try { await api.post(`/finance/ap-bills/${bill.id}/settle`, { amount: v }); toast.push("Payment applied"); ap.reload(); }
     catch (e) { toast.push("Failed", { detail: (e as ApiError).message, bad: true }); }
   }
+  async function matchInvoice(bill: APBill) {
+    if (!bill.goods_receipt_id) return;
+    const supplierInvoiceNumber = prompt("Supplier invoice number");
+    if (!supplierInvoiceNumber) return;
+    const amount = prompt(`Invoice amount (received value ${bill.received_amount})`, bill.received_amount);
+    if (!amount) return;
+    try {
+      await api.post("/finance/supplier-invoices", {
+        goods_receipt_id: bill.goods_receipt_id,
+        supplier_invoice_number: supplierInvoiceNumber,
+        amount,
+        bill_date: new Date().toISOString().slice(0, 10),
+      });
+      toast.push("Supplier invoice matched");
+      ap.reload();
+    } catch (e) { toast.push("Match failed", { detail: (e as ApiError).message, bad: true }); }
+  }
   return (
-    <Card title="Accounts payable" hint="auto-raised on goods receipt">
+    <Card title="Accounts payable" hint="match supplier invoices against PO and receipt before payment">
       {ap.loading ? <Spinner /> : (
         <div className="table-wrap">
           <table className="tbl">
-            <thead><tr><th>Bill</th><th className="num">Amount</th><th className="num">Settled</th><th className="num">Outstanding</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Bill</th><th>Supplier invoice</th><th>Match</th><th className="num">Amount</th><th className="num">Variance</th><th className="num">Outstanding</th><th></th></tr></thead>
             <tbody>
               {ap.data?.map((b) => (
                 <tr key={b.id}>
                   <td className="code">{b.bill_number}</td>
+                  <td className="code">{b.supplier_invoice_number || "—"}</td>
+                  <td><Chip status={b.match_status} /></td>
                   <td className="num">{money(b.amount)}</td>
-                  <td className="num">{money(b.settled_amount)}</td>
+                  <td className="num">{money(b.variance_amount)}</td>
                   <td className="num" style={{ color: parseFloat(b.outstanding) > 0 ? "var(--madder)" : "var(--ok)" }}>{money(b.outstanding)}</td>
-                  <td><Chip status={b.status} /></td>
-                  <td className="right">{can("finance") && parseFloat(b.outstanding) > 0 && <button className="btn sm" onClick={() => settle(b)}>Pay</button>}</td>
+                  <td className="right"><div className="inline-actions">{can("finance") && b.match_status === "pending" && !!b.goods_receipt_id && <button className="btn sm" onClick={() => matchInvoice(b)}>Match invoice</button>}{can("finance") && b.match_status === "matched" && parseFloat(b.outstanding) > 0 && <button className="btn sm" onClick={() => settle(b)}>Pay</button>}</div></td>
                 </tr>
               ))}
-              {!ap.data?.length && <tr><td colSpan={6} className="muted">No payables yet. Post a goods receipt to raise one.</td></tr>}
+              {!ap.data?.length && <tr><td colSpan={7} className="muted">No payables yet. Post a goods receipt to raise a matchable accrual.</td></tr>}
             </tbody>
           </table>
         </div>

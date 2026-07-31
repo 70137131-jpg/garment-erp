@@ -191,6 +191,8 @@ class CutOrderRead(SQLModel):
     fabric_issued: Decimal
     pieces_cut: int
     status: CutOrderStatus
+    # Derived from the approved cut plan's markers (module 14), not typed in.
+    marker_efficiency: Optional[Decimal] = None
     sizes: List[CutSizeRead]
 
 

@@ -34,7 +34,10 @@ from .models import (
     JournalStatus,
     ProfitAndLossRead,
     SettleRequest,
+    SupplierInvoiceCreate,
     SettlementStatus,
+    ThreeWayMatchExceptionRead,
+    ThreeWayMatchStatus,
     TrialBalanceRead,
 )
 from .service import (
@@ -42,6 +45,7 @@ from .service import (
     account_by_code,
     balance_sheet,
     cash_flow,
+    match_supplier_invoice,
     post_journal,
     profit_and_loss,
     reverse_journal,
@@ -351,6 +355,26 @@ def _settle(record, amount: Decimal) -> None:
         record.status = SettlementStatus.part_paid
 
 
+def _ap_bill_read(bill: APBill) -> APBillRead:
+    return APBillRead(
+        id=bill.id,
+        bill_number=bill.bill_number,
+        supplier_id=bill.supplier_id,
+        purchase_order_id=bill.purchase_order_id,
+        goods_receipt_id=bill.goods_receipt_id,
+        supplier_invoice_number=bill.supplier_invoice_number,
+        amount=bill.amount,
+        settled_amount=bill.settled_amount,
+        outstanding=quantize_money(bill.amount - bill.settled_amount),
+        status=bill.status,
+        match_status=bill.match_status,
+        received_amount=bill.received_amount,
+        variance_amount=bill.variance_amount,
+        bill_date=bill.bill_date,
+        due_date=bill.due_date,
+    )
+
+
 @router.get("/ar-invoices", response_model=List[ARInvoiceRead])
 def list_ar(session: Session = Depends(get_session)):
     return [
@@ -405,13 +429,43 @@ def settle_ar(
 
 @router.get("/ap-bills", response_model=List[APBillRead])
 def list_ap(session: Session = Depends(get_session)):
+    return [_ap_bill_read(bill) for bill in session.exec(select(APBill).order_by(APBill.id)).all()]
+
+
+@router.post("/supplier-invoices", response_model=APBillRead, status_code=201)
+def create_supplier_invoice(
+    payload: SupplierInvoiceCreate,
+    session: Session = Depends(get_session),
+    _: str = Depends(require_roles(Role.finance)),
+):
+    try:
+        bill = match_supplier_invoice(session, payload)
+    except FinanceError as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Duplicate supplier invoice number") from exc
+    session.commit()
+    session.refresh(bill)
+    return _ap_bill_read(bill)
+
+
+@router.get("/three-way-match/exceptions", response_model=List[ThreeWayMatchExceptionRead])
+def list_three_way_match_exceptions(session: Session = Depends(get_session)):
     return [
-        APBillRead(
-            id=b.id, bill_number=b.bill_number, supplier_id=b.supplier_id,
-            goods_receipt_id=b.goods_receipt_id, amount=b.amount, settled_amount=b.settled_amount,
-            outstanding=quantize_money(b.amount - b.settled_amount), status=b.status,
+        ThreeWayMatchExceptionRead(
+            bill=_ap_bill_read(bill),
+            reason=(
+                f"Invoice variance {bill.variance_amount} against received amount "
+                f"{bill.received_amount}"
+            ),
         )
-        for b in session.exec(select(APBill).order_by(APBill.id)).all()
+        for bill in session.exec(
+            select(APBill)
+            .where(APBill.match_status == ThreeWayMatchStatus.exception)
+            .order_by(APBill.id.desc())
+        ).all()
     ]
 
 
@@ -425,6 +479,10 @@ def settle_ap(
     bill = session.get(APBill, bill_id)
     if bill is None:
         raise HTTPException(status_code=404, detail="AP bill not found")
+    if bill.match_status == ThreeWayMatchStatus.pending:
+        raise HTTPException(status_code=409, detail="Match the supplier invoice before payment")
+    if bill.match_status == ThreeWayMatchStatus.exception:
+        raise HTTPException(status_code=409, detail="Resolve the three-way match exception before payment")
     if payload.amount <= 0:
         raise HTTPException(status_code=422, detail="Settlement amount must be positive")
     if bill.settled_amount + payload.amount > bill.amount:
@@ -447,11 +505,7 @@ def settle_ap(
     session.add(bill)
     session.commit()
     session.refresh(bill)
-    return APBillRead(
-        id=bill.id, bill_number=bill.bill_number, supplier_id=bill.supplier_id,
-        goods_receipt_id=bill.goods_receipt_id, amount=bill.amount, settled_amount=bill.settled_amount,
-        outstanding=quantize_money(bill.amount - bill.settled_amount), status=bill.status,
-    )
+    return _ap_bill_read(bill)
 
 
 # --------------------------------------------------------------------------- #

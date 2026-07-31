@@ -72,6 +72,7 @@ def _cut_read(cut_order: CutOrder) -> CutOrderRead:
         fabric_issued=cut_order.fabric_issued,
         pieces_cut=cut_order.pieces_cut,
         status=cut_order.status,
+        marker_efficiency=cut_order.marker_efficiency,
         sizes=[
             CutSizeRead(
                 size_label=s.size_label,

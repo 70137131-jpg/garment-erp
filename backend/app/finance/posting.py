@@ -36,6 +36,7 @@ from .service import (
     ACC_AP,
     ACC_AR,
     ACC_COGS,
+    ACC_GRNI,
     ACC_INVENTORY,
     ACC_SALES,
     account_by_code,
@@ -55,21 +56,22 @@ def on_goods_receipt(event: GoodsReceiptPosted) -> None:
         session,
         lines=[
             (ACC_INVENTORY, event.total_value, Decimal("0"), "Goods received"),
-            (ACC_AP, Decimal("0"), event.total_value, "Payable to supplier"),
+            (ACC_GRNI, Decimal("0"), event.total_value, "Goods received not invoiced"),
         ],
         memo=f"Goods receipt {event.receipt_number}",
         source=JournalSource.system,
         reference_type="goods_receipt",
         reference_id=event.goods_receipt_id,
     )
-    bill_number = next_document_number(session, "AP_BILL", "AP")
     session.add(
         APBill(
-            bill_number=bill_number,
+            bill_number=f"GR-{event.receipt_number}",
             supplier_id=event.supplier_id,
+            purchase_order_id=event.purchase_order_id,
             goods_receipt_id=event.goods_receipt_id,
             currency=event.currency,
             amount=event.total_value,
+            received_amount=event.total_value,
             status=SettlementStatus.open,
             bill_date=date.today(),
         )

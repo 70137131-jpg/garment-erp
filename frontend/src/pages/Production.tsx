@@ -30,7 +30,7 @@ export default function Production() {
 function CutOrders() {
   const { can } = useAuthorization();
   const cuts = useAsync(() => api.get<CutOrder[]>("/production/cut-orders"));
-  const styles = useAsync(() => api.get<Style[]>("/styles"));
+  const styles = useAsync(() => api.get<Style[]>("/styles"), [], "/styles");
   const [open, setOpen] = useState(false);
   const toast = useToast();
   const styleNo = (id: number) => styles.data?.find((s) => s.id === id)?.style_number ?? `#${id}`;
@@ -82,7 +82,7 @@ function CutOrders() {
 
 function CutForm({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const toast = useToast();
-  const styles = useAsync(() => api.get<Style[]>("/styles"));
+  const styles = useAsync(() => api.get<Style[]>("/styles"), [], "/styles");
   const colours = useAsync(() => api.get<Colour[]>("/masters/colours"));
   const ranges = useAsync(() => api.get<SizeRange[]>("/masters/size-ranges"));
   const [styleId, setStyleId] = useState(0);
@@ -142,7 +142,7 @@ function CutForm({ onClose, onDone }: { onClose: () => void; onDone: () => void 
 function Sewing() {
   const { can } = useAuthorization();
   const orders = useAsync(() => api.get<SewingOrder[]>("/production/sewing-orders"));
-  const styles = useAsync(() => api.get<Style[]>("/styles"));
+  const styles = useAsync(() => api.get<Style[]>("/styles"), [], "/styles");
   const [open, setOpen] = useState(false);
   const [output, setOutput] = useState<SewingOrder | null>(null);
   const styleNo = (id: number) => styles.data?.find((s) => s.id === id)?.style_number ?? `#${id}`;
@@ -246,7 +246,7 @@ function RoutingWip() {
   const { can } = useAuthorization();
   const routes = useAsync(() => api.get<ProductionRoute[]>("/production/routes"));
   const sewing = useAsync(() => api.get<SewingOrder[]>("/production/sewing-orders"));
-  const styles = useAsync(() => api.get<Style[]>("/styles"));
+  const styles = useAsync(() => api.get<Style[]>("/styles"), [], "/styles");
   const [sewingId, setSewingId] = useState(0);
   const selected = sewing.data?.find((order) => order.id === sewingId);
   const activeRoute = routes.data?.find((route) => route.style_id === selected?.style_id && route.active);

@@ -31,6 +31,7 @@ class Permission(str, Enum):
     quality_read = "quality:read"
     costing_read = "costing:read"
     finance_read = "finance:read"
+    planning_read = "planning:read"
     users_manage = "users:manage"
     # Workforce data (attendance, piece rates) is HR-sensitive: deliberately
     # excluded from _ALL_READ and granted role-by-role.
@@ -47,6 +48,7 @@ _ALL_READ = {
     Permission.quality_read,
     Permission.costing_read,
     Permission.finance_read,
+    Permission.planning_read,
 }
 
 ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
@@ -61,6 +63,7 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.production_read,
         Permission.quality_read,
         Permission.costing_read,
+        Permission.planning_read,
     },
     Role.procurement: {
         Permission.masters_read,
@@ -69,6 +72,7 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.inventory_read,
         Permission.production_read,
         Permission.quality_read,
+        Permission.planning_read,
     },
     Role.stores: {
         Permission.masters_read,
@@ -107,6 +111,7 @@ ROLE_PERMISSIONS: dict[Role, set[Permission]] = {
         Permission.production_read,
         Permission.quality_read,
         Permission.costing_read,
+        Permission.planning_read,
         Permission.workforce_read,
     },
     Role.finance: _ALL_READ | {Permission.workforce_read},

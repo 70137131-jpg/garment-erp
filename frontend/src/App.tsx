@@ -13,7 +13,11 @@ const Costing = lazy(() => import("./pages/Costing"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Finance = lazy(() => import("./pages/Finance"));
 const Inventory = lazy(() => import("./pages/Inventory"));
+const Markers = lazy(() => import("./pages/Markers"));
 const Masters = lazy(() => import("./pages/Masters"));
+const Planning = lazy(() => import("./pages/Planning"));
+const ShopFloor = lazy(() => import("./pages/ShopFloor"));
+const Warehouse = lazy(() => import("./pages/Warehouse"));
 const Procurement = lazy(() => import("./pages/Procurement"));
 const Production = lazy(() => import("./pages/Production"));
 const Quality = lazy(() => import("./pages/Quality"));
@@ -174,15 +178,19 @@ function Workspace() {
       <Shell user={user} onLogout={async () => { try { await auth.logout(); } finally { setUser(null); } }}>
         <Suspense fallback={<Spinner />}>
         <Routes>
-          <Route path="/" element={<Dashboard permissions={user.permissions} />} />
+          <Route path="/" element={<Dashboard user={user} />} />
           <Route path="/masters" element={permit("masters:read", <Masters />)} />
           <Route path="/styles" element={permit("styles:read", <Styles />)} />
           <Route path="/styles/:id" element={permit("styles:read", <StyleDetail />)} />
           <Route path="/sales" element={permit("sales:read", <Sales />)} />
           <Route path="/sales/:id" element={permit("sales:read", <SalesDetail />)} />
+          <Route path="/planning" element={permit("planning:read", <Planning />)} />
           <Route path="/procurement" element={permit("procurement:read", <Procurement />)} />
           <Route path="/inventory" element={permit("inventory:read", <Inventory />)} />
           <Route path="/production" element={permit("production:read", <Production />)} />
+          <Route path="/markers" element={permit("production:read", <Markers />)} />
+          <Route path="/shop-floor" element={permit("production:read", <ShopFloor />)} />
+          <Route path="/warehouse" element={permit("inventory:read", <Warehouse />)} />
           <Route path="/quality" element={permit("quality:read", <Quality />)} />
           <Route path="/costing" element={permit("costing:read", <Costing />)} />
           <Route path="/finance" element={permit("finance:read", <Finance />)} />

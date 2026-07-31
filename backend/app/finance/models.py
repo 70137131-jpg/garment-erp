@@ -11,6 +11,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import List, Optional
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 from ..kernel.audit import TimestampMixin
@@ -40,6 +41,12 @@ class SettlementStatus(str, Enum):
     open = "open"
     part_paid = "part_paid"
     paid = "paid"
+
+
+class ThreeWayMatchStatus(str, Enum):
+    pending = "pending"
+    matched = "matched"
+    exception = "exception"
 
 
 # --------------------------------------------------------------------------- #
@@ -128,15 +135,28 @@ class ARInvoice(TimestampMixin, table=True):
 
 class APBill(TimestampMixin, table=True):
     __tablename__ = "ap_bill"
+    __table_args__ = (
+        UniqueConstraint(
+            "supplier_id", "supplier_invoice_number",
+            name="uq_ap_bill_supplier_invoice_number",
+        ),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     bill_number: str = Field(index=True, unique=True)
     supplier_id: int = Field(foreign_key="supplier.id", index=True)
+    purchase_order_id: Optional[int] = Field(default=None, foreign_key="purchase_order.id", index=True)
     goods_receipt_id: Optional[int] = Field(default=None, index=True)
+    supplier_invoice_number: Optional[str] = Field(default=None, index=True)
     currency: str = "USD"
     amount: Decimal = money_field(default=Decimal("0"))
     settled_amount: Decimal = money_field(default=Decimal("0"))
     status: SettlementStatus = Field(default=SettlementStatus.open, index=True)
+    match_status: ThreeWayMatchStatus = Field(
+        default=ThreeWayMatchStatus.pending, index=True
+    )
+    received_amount: Decimal = money_field(default=Decimal("0"))
+    variance_amount: Decimal = money_field(default=Decimal("0"))
     bill_date: Optional[date] = None
     due_date: Optional[date] = Field(default=None, index=True)
 
@@ -197,17 +217,37 @@ class APBillRead(SQLModel):
     id: int
     bill_number: str
     supplier_id: int
+    purchase_order_id: Optional[int]
     goods_receipt_id: Optional[int]
+    supplier_invoice_number: Optional[str]
     amount: Decimal
     settled_amount: Decimal
     outstanding: Decimal
     status: SettlementStatus
+    match_status: ThreeWayMatchStatus
+    received_amount: Decimal
+    variance_amount: Decimal
     bill_date: Optional[date] = None
     due_date: Optional[date] = None
 
 
 class SettleRequest(SQLModel):
     amount: Decimal
+
+
+class SupplierInvoiceCreate(SQLModel):
+    """Supplier invoice matched against the originating PO and goods receipt."""
+
+    goods_receipt_id: int
+    supplier_invoice_number: str
+    amount: Decimal
+    bill_date: Optional[date] = None
+    due_date: Optional[date] = None
+
+
+class ThreeWayMatchExceptionRead(SQLModel):
+    bill: APBillRead
+    reason: str
 
 
 class ProfitAndLossRead(SQLModel):

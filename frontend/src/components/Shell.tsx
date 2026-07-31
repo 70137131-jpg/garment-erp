@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { AuthUser } from "../api/client";
+import { prefetchRoute } from "../lib/prefetch";
 import { AccountMenu } from "./AccountMenu";
 
 interface NavItem {
@@ -31,9 +32,13 @@ const NAV: NavGroup[] = [
   {
     label: "Supply & Make",
     items: [
+      { to: "/planning", ic: "PL", name: "Planning" },
       { to: "/procurement", ic: "PO", name: "Procurement" },
       { to: "/inventory", ic: "IN", name: "Inventory" },
       { to: "/production", ic: "PR", name: "Production" },
+      { to: "/markers", ic: "MK", name: "Marker & Cut" },
+      { to: "/shop-floor", ic: "SF", name: "Shop Floor" },
+      { to: "/warehouse", ic: "WH", name: "Warehouse" },
       { to: "/quality", ic: "QC", name: "Quality" },
     ],
   },
@@ -50,9 +55,13 @@ const PAGE_PERMISSION: Record<string, string> = {
   "/sales": "sales:read",
   "/styles": "styles:read",
   "/costing": "costing:read",
+  "/planning": "planning:read",
   "/procurement": "procurement:read",
   "/inventory": "inventory:read",
   "/production": "production:read",
+  "/markers": "production:read",
+  "/shop-floor": "production:read",
+  "/warehouse": "inventory:read",
   "/quality": "quality:read",
   "/masters": "masters:read",
   "/finance": "finance:read",
@@ -65,9 +74,13 @@ function crumbFor(path: string): string {
     sales: "Sales Orders",
     styles: "Styles & BOM",
     costing: "Costing",
+    planning: "Planning",
     procurement: "Procurement",
     inventory: "Inventory",
     production: "Production",
+    markers: "Marker & Cut",
+    "shop-floor": "Shop Floor",
+    warehouse: "Warehouse",
     quality: "Quality",
     masters: "Master Data",
     finance: "Finance",
@@ -134,6 +147,11 @@ export function Shell({ children, user, onLogout }: { children: ReactNode; user:
                     key={item.to}
                     to={item.to}
                     end={item.end}
+                    // Start the chunk download while the pointer is still
+                    // travelling, so the click only waits on data.
+                    onMouseEnter={() => prefetchRoute(item.to)}
+                    onFocus={() => prefetchRoute(item.to)}
+                    onTouchStart={() => prefetchRoute(item.to)}
                     className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
                   >
                     <span className="ic" aria-hidden="true">{item.ic}</span>
@@ -146,7 +164,7 @@ export function Shell({ children, user, onLogout }: { children: ReactNode; user:
           {user.permissions.includes("users:manage") && (
             <div className="nav-group">
               <div className="nav-label">Administration</div>
-              <NavLink to="/users" className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
+              <NavLink to="/users" onMouseEnter={() => prefetchRoute("/users")} onFocus={() => prefetchRoute("/users")} className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}>
                 <span className="ic" aria-hidden="true">AC</span>
                 <span>Access Control</span>
               </NavLink>

@@ -6,6 +6,16 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # The image default is max_connections=100, which the API alone can consume
+    # once WEB_CONCURRENCY rises (each worker holds its own pool). Raising it
+    # leaves headroom for backups, psql and migrations. Each connection costs a
+    # few MB of RAM, so do not raise it far beyond what the pools can request.
+    command:
+      - postgres
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-200}
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-garment_erp}
       POSTGRES_USER: ${POSTGRES_USER:-garment_erp}
@@ -37,6 +47,10 @@ services:
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+      # Per-worker pool. Cluster peak = WEB_CONCURRENCY × (pool + overflow),
+      # which must stay under the database's max_connections.
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
       ATTACHMENTS_DIR: /data/attachments
     volumes:
       - attachments:/data/attachments

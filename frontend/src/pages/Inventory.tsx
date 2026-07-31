@@ -35,7 +35,7 @@ const ROLL_STATUSES = ["", "pending_inspection", "available", "reserved", "quara
 function Rolls() {
   const [status, setStatus] = useState("");
   const rolls = useAsync(() => api.get<Roll[]>(`/inventory/rolls${status ? `?status=${status}` : ""}`), [status]);
-  const materials = useAsync(() => api.get<Material[]>("/masters/materials"));
+  const materials = useAsync(() => api.get<Material[]>("/masters/materials"), [], "/masters/materials");
   const view = useListView(rolls.data ?? [], (roll) => `${roll.roll_number} ${roll.dye_lot ?? ""} ${roll.shade_group ?? ""}`, (a, b) => a.id - b.id);
   const materialName = (id: number) => materials.data?.find((material) => material.id === id)?.name ?? `#${id}`;
   return (
@@ -149,7 +149,7 @@ function OperationForm({ rolls, onClose, onDone }: { rolls: Roll[]; onClose: () 
 
 function Ledger() {
   const ledger = useAsync(() => api.get<LedgerEntry[]>("/inventory/ledger"));
-  const materials = useAsync(() => api.get<Material[]>("/masters/materials"));
+  const materials = useAsync(() => api.get<Material[]>("/masters/materials"), [], "/masters/materials");
   const view = useListView(ledger.data ?? [], (entry) => `${entry.id} ${entry.movement_type} ${entry.reference_type ?? ""} ${entry.note ?? ""}`, (a, b) => a.id - b.id);
   const materialName = (id: number) => materials.data?.find((material) => material.id === id)?.name ?? `#${id}`;
   return <Card title="Stock ledger" hint="Append-only; balance equals sum of lines"><ListToolbar {...toolbarProps(view)} exportPath="/inventory/ledger/export" placeholder="Search movement, reference, note..." />
@@ -162,7 +162,7 @@ function Ledger() {
 interface Valuation { material_id: number; warehouse?: string; location?: string; quantity: string; value: string; unit_cost: string; }
 function Valuation() {
   const values = useAsync(() => api.get<Valuation[]>("/inventory/valuation"));
-  const materials = useAsync(() => api.get<Material[]>("/masters/materials"));
+  const materials = useAsync(() => api.get<Material[]>("/masters/materials"), [], "/masters/materials");
   const name = (id: number) => materials.data?.find((material) => material.id === id)?.name ?? `#${id}`;
   return <Card title="Stock valuation" hint="Ledger-derived book value; FIFO or weighted-average by material">
     {values.loading ? <Spinner /> : <div className="table-wrap"><table className="tbl"><thead><tr><th>Material</th><th>Method</th><th className="num">On hand</th><th className="num">Unit cost</th><th className="num">Value</th></tr></thead><tbody>
@@ -174,7 +174,7 @@ function Valuation() {
 
 function Reservations() {
   const reservations = useAsync(() => api.get<Reservation[]>("/inventory/reservations"));
-  const materials = useAsync(() => api.get<Material[]>("/masters/materials"));
+  const materials = useAsync(() => api.get<Material[]>("/masters/materials"), [], "/masters/materials");
   const view = useListView(reservations.data ?? [], (item) => `${item.id} ${item.status} ${item.reference_type ?? ""}`, (a, b) => a.id - b.id);
   const materialName = (id: number) => materials.data?.find((material) => material.id === id)?.name ?? `#${id}`;
   return <Card title="Reservations" hint="Active to released or consumed"><ListToolbar {...toolbarProps(view)} placeholder="Search reservation or status..." />

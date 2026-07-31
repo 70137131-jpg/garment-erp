@@ -10,13 +10,17 @@ from sqlmodel import Session, select
 from ..kernel.numbering import next_document_number
 from ..kernel.state_machine import StateMachine
 from ..kernel.types import quantize_money
+from ..procurement.models import GoodsReceipt
 from .models import (
     Account,
+    APBill,
     AccountType,
     JournalEntry,
     JournalLine,
     JournalSource,
     JournalStatus,
+    SupplierInvoiceCreate,
+    ThreeWayMatchStatus,
 )
 
 # Well-known account codes used by auto-posting.
@@ -24,17 +28,36 @@ ACC_INVENTORY = "1000"
 ACC_AR = "1100"
 ACC_BANK = "1200"
 ACC_AP = "2000"
+ACC_GRNI = "2100"
 ACC_SALES = "4000"
 ACC_COGS = "5000"
+ACC_PURCHASE_PRICE_VARIANCE = "6100"
+# Manufacturing variance accounts (6.8). These receive a *reclassification* of
+# cost already sitting in COGS — never a second charge. See
+# ``app.costing.actuals`` for why the GL is actual-cost driven.
+ACC_MATERIAL_PRICE_VARIANCE = "6110"
+ACC_MATERIAL_USAGE_VARIANCE = "6120"
+ACC_LABOUR_RATE_VARIANCE = "6130"
+ACC_LABOUR_EFFICIENCY_VARIANCE = "6140"
+ACC_OVERHEAD_VARIANCE = "6150"
+ACC_SUBCONTRACT_VARIANCE = "6160"
 
 _DEFAULT_COA: List[Tuple[str, str, AccountType]] = [
     (ACC_INVENTORY, "Inventory", AccountType.asset),
     (ACC_AR, "Accounts Receivable", AccountType.asset),
     (ACC_BANK, "Bank", AccountType.asset),
     (ACC_AP, "Accounts Payable", AccountType.liability),
+    (ACC_GRNI, "Goods Received Not Invoiced", AccountType.liability),
     ("3000", "Retained Earnings", AccountType.equity),
     (ACC_SALES, "Sales Revenue", AccountType.income),
     (ACC_COGS, "Cost of Goods Sold", AccountType.expense),
+    (ACC_PURCHASE_PRICE_VARIANCE, "Purchase Price Variance", AccountType.expense),
+    (ACC_MATERIAL_PRICE_VARIANCE, "Material Price Variance", AccountType.expense),
+    (ACC_MATERIAL_USAGE_VARIANCE, "Material Usage Variance", AccountType.expense),
+    (ACC_LABOUR_RATE_VARIANCE, "Labour Rate Variance", AccountType.expense),
+    (ACC_LABOUR_EFFICIENCY_VARIANCE, "Labour Efficiency Variance", AccountType.expense),
+    (ACC_OVERHEAD_VARIANCE, "Overhead Variance", AccountType.expense),
+    (ACC_SUBCONTRACT_VARIANCE, "Subcontract Variance", AccountType.expense),
     ("6000", "Overhead Expense", AccountType.expense),
 ]
 
@@ -121,6 +144,87 @@ def post_journal(
         )
     session.flush()
     return entry
+
+
+def match_supplier_invoice(
+    session: Session, payload: SupplierInvoiceCreate
+) -> APBill:
+    """Complete the PO â†’ receipt â†’ supplier-invoice match for one receipt.
+
+    The goods receipt already posted the inventory and GRNI accrual.  Matching
+    moves that accrual to Accounts Payable.  Any invoice-price difference is
+    explicitly booked to Purchase Price Variance and remains payment-blocked
+    until finance resolves it.
+    """
+    if payload.amount <= 0:
+        raise FinanceError("Supplier invoice amount must be positive")
+    invoice_number = payload.supplier_invoice_number.strip()
+    if not invoice_number:
+        raise FinanceError("Supplier invoice number is required")
+
+    receipt = session.get(GoodsReceipt, payload.goods_receipt_id)
+    if receipt is None:
+        raise FinanceError("Goods receipt not found")
+    bill = session.exec(
+        select(APBill).where(APBill.goods_receipt_id == receipt.id)
+    ).first()
+    if bill is None:
+        raise FinanceError("No payable accrual exists for this goods receipt")
+    if bill.purchase_order_id != receipt.purchase_order_id:
+        raise FinanceError("Payable accrual does not match the goods receipt purchase order")
+    if bill.supplier_id != receipt.supplier_id:
+        raise FinanceError("Payable accrual does not match the goods receipt supplier")
+    if bill.supplier_invoice_number is not None:
+        raise FinanceError("Goods receipt has already been matched to a supplier invoice")
+    if bill.settled_amount:
+        raise FinanceError("Cannot match an AP bill that has already been paid")
+    duplicate = session.exec(
+        select(APBill).where(
+            APBill.supplier_id == receipt.supplier_id,
+            APBill.supplier_invoice_number == invoice_number,
+        )
+    ).first()
+    if duplicate is not None:
+        raise FinanceError("Supplier invoice number already exists for this supplier")
+
+    expected = bill.received_amount
+    variance = quantize_money(payload.amount - expected)
+    lines = [
+        (ACC_GRNI, expected, Decimal("0"), "Clear goods received not invoiced"),
+        (ACC_AP, Decimal("0"), payload.amount, "Supplier invoice payable"),
+    ]
+    if variance > 0:
+        lines.insert(
+            1,
+            (ACC_PURCHASE_PRICE_VARIANCE, variance, Decimal("0"), "Supplier price variance"),
+        )
+    elif variance < 0:
+        lines.insert(
+            1,
+            (ACC_PURCHASE_PRICE_VARIANCE, Decimal("0"), -variance, "Supplier price variance"),
+        )
+    post_journal(
+        session,
+        lines=lines,
+        memo=f"Supplier invoice {invoice_number} matched to {receipt.receipt_number}",
+        source=JournalSource.system,
+        reference_type="supplier_invoice",
+        reference_id=bill.id,
+        entry_date=payload.bill_date,
+    )
+    bill.supplier_invoice_number = invoice_number
+    bill.amount = quantize_money(payload.amount)
+    bill.variance_amount = variance
+    bill.match_status = (
+        ThreeWayMatchStatus.matched
+        if abs(variance) <= Decimal("0.01")
+        else ThreeWayMatchStatus.exception
+    )
+    bill.bill_date = payload.bill_date or date.today()
+    bill.due_date = payload.due_date
+    session.add(bill)
+    session.flush()
+    return bill
 
 
 def reverse_journal(session: Session, entry: JournalEntry) -> JournalEntry:

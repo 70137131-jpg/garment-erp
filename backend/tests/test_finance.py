@@ -52,29 +52,77 @@ def test_manual_journal_and_reversal(finance_client):
     assert listed[0]["memo"].startswith("Reversal of")
 
 
-def test_goods_receipt_auto_posts_ap_and_inventory(finance_client, session):
+def test_supplier_invoice_three_way_match_moves_grni_to_ap(finance_client, session):
     supplier = make_supplier(finance_client)
     fabric = make_fabric(finance_client)
     po = finance_client.post(
         "/procurement/purchase-orders",
         json={"supplier_id": supplier, "lines": [{"material_id": fabric, "ordered_qty": "100", "unit_price": "4"}]},
     ).json()
-    finance_client.post(
+    receipt = finance_client.post(
         "/procurement/goods-receipts",
         json={"purchase_order_id": po["id"], "rolls": [
             {"purchase_order_line_id": po["lines"][0]["id"], "length": "100", "width_cm": "150"}]},
     )
 
-    # Inventory debit 400, AP credit 400.
+    # Receipt debits inventory and accrues GRNI until the supplier invoice arrives.
     inv = account_by_code(session, "1000")
     ap = account_by_code(session, "2000")
+    grni = account_by_code(session, "2100")
     assert account_balance(session, inv) == Decimal("400.00")
-    assert account_balance(session, ap) == Decimal("400.00")
+    assert account_balance(session, ap) == Decimal("0.00")
+    assert account_balance(session, grni) == Decimal("400.00")
 
-    # An AP bill was raised.
+    # A pending AP accrual has the PO and receipt side of the three-way match.
     bills = finance_client.get("/finance/ap-bills").json()
     assert len(bills) == 1
+    assert bills[0]["match_status"] == "pending"
     assert Decimal(bills[0]["outstanding"]) == Decimal("400.00")
+
+    matched = finance_client.post(
+        "/finance/supplier-invoices",
+        json={
+            "goods_receipt_id": receipt.json()["id"],
+            "supplier_invoice_number": "SUP-400",
+            "amount": "400",
+            "bill_date": "2026-07-30",
+        },
+    )
+    assert matched.status_code == 201, matched.text
+    assert matched.json()["match_status"] == "matched"
+    assert account_balance(session, grni) == Decimal("0.00")
+    assert account_balance(session, ap) == Decimal("400.00")
+
+
+def test_supplier_invoice_variance_is_an_exception_and_blocks_payment(finance_client, session):
+    supplier = make_supplier(finance_client)
+    fabric = make_fabric(finance_client)
+    po = finance_client.post(
+        "/procurement/purchase-orders",
+        json={"supplier_id": supplier, "lines": [{"material_id": fabric, "ordered_qty": "100", "unit_price": "4"}]},
+    ).json()
+    receipt = finance_client.post(
+        "/procurement/goods-receipts",
+        json={"purchase_order_id": po["id"], "rolls": [
+            {"purchase_order_line_id": po["lines"][0]["id"], "length": "100", "width_cm": "150"}]},
+    ).json()
+
+    matched = finance_client.post(
+        "/finance/supplier-invoices",
+        json={
+            "goods_receipt_id": receipt["id"],
+            "supplier_invoice_number": "SUP-420",
+            "amount": "420",
+        },
+    )
+    assert matched.status_code == 201, matched.text
+    bill = matched.json()
+    assert bill["match_status"] == "exception"
+    assert Decimal(bill["variance_amount"]) == Decimal("20.00")
+    assert Decimal(account_balance(session, account_by_code(session, "2000"))) == Decimal("420.00")
+    assert Decimal(account_balance(session, account_by_code(session, "6100"))) == Decimal("20.00")
+    assert finance_client.post(f"/finance/ap-bills/{bill['id']}/settle", json={"amount": "420"}).status_code == 409
+    assert len(finance_client.get("/finance/three-way-match/exceptions").json()) == 1
 
 
 def _order_to_shipment(finance_client):
