@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { api, ApiError, AuthUser } from "../api/client";
+import { PasswordInput } from "../components/PasswordInput";
 import { Card, Chip, Drawer, ErrorBox, Field, PageHeader, Spinner, Tabs } from "../components/ui";
 import { useToast } from "../components/Toast";
 import { useAsync } from "../lib/useAsync";
@@ -104,8 +105,8 @@ function ResetPassword({ user, onClose, onDone }: { user: AuthUser; onClose: () 
   }
   return <Drawer title={`Reset ${user.display_name}'s password`} sub="All existing sessions will be revoked" onClose={onClose} footer={<><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={saving || password.length < 15} onClick={save}>Reset password</button></>}>
     {error && <ErrorBox message={error} />}
-    <Field label="Temporary password" required><input className="input" type="password" minLength={15} value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
-    <Field label="Confirm password" required><input className="input" type="password" minLength={15} value={confirmation} onChange={(e) => setConfirmation(e.target.value)} /></Field>
+    <Field label="Temporary password" required><PasswordInput className="input" minLength={15} value={password} onChange={(e) => setPassword(e.target.value)} showStrength /></Field>
+    <Field label="Confirm password" required><PasswordInput className="input" minLength={15} value={confirmation} onChange={(e) => setConfirmation(e.target.value)} /></Field>
   </Drawer>;
 }
 

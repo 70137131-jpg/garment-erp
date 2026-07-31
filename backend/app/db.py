@@ -23,6 +23,12 @@ def build_engine(database_url: str) -> Engine:
             database_url,
             echo=False,
             pool_pre_ping=True,
+            # Sized explicitly rather than left to SQLAlchemy's defaults: the
+            # pool is per *process*, so the real ceiling is this multiplied by
+            # the number of gunicorn workers. See Settings.db_pool_size.
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_recycle=settings.db_pool_recycle_seconds,
             connect_args={"options": "-c timezone=utc"},
         )
     return create_engine(database_url, echo=False)

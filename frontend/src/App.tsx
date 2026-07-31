@@ -2,8 +2,10 @@ import { FormEvent, ReactNode, Suspense, lazy, useEffect, useState } from "react
 import { Navigate, Route, Routes } from "react-router-dom";
 import { ApiError, AuthUser, auth } from "./api/client";
 import { AuthorizationProvider } from "./auth/Authorization";
+import { PasswordInput } from "./components/PasswordInput";
 import { Shell } from "./components/Shell";
 import { Spinner } from "./components/ui";
+import { ThemeProvider } from "./theme/ThemeProvider";
 
 // Route-level code splitting: each workspace page ships as its own chunk, so
 // first paint only loads the shell + the page being visited.
@@ -11,12 +13,17 @@ const Costing = lazy(() => import("./pages/Costing"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Finance = lazy(() => import("./pages/Finance"));
 const Inventory = lazy(() => import("./pages/Inventory"));
+const Markers = lazy(() => import("./pages/Markers"));
 const Masters = lazy(() => import("./pages/Masters"));
+const Planning = lazy(() => import("./pages/Planning"));
+const ShopFloor = lazy(() => import("./pages/ShopFloor"));
+const Warehouse = lazy(() => import("./pages/Warehouse"));
 const Procurement = lazy(() => import("./pages/Procurement"));
 const Production = lazy(() => import("./pages/Production"));
 const Quality = lazy(() => import("./pages/Quality"));
 const Sales = lazy(() => import("./pages/Sales"));
 const SalesDetail = lazy(() => import("./pages/SalesDetail"));
+const Settings = lazy(() => import("./pages/Settings"));
 const StyleDetail = lazy(() => import("./pages/StyleDetail"));
 const Styles = lazy(() => import("./pages/Styles"));
 const Users = lazy(() => import("./pages/Users"));
@@ -82,7 +89,7 @@ function Login({ onLogin }: { onLogin: (user: AuthUser) => void }) {
         <label htmlFor="login-email">Email address</label>
         <input id="login-email" className="input" type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" required autoFocus />
         <label htmlFor="login-password">Password</label>
-        <input id="login-password" className="input" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" required />
+        <PasswordInput id="login-password" className="input" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" required />
         <button className="btn primary auth-submit" disabled={busy}>{busy ? "Signing in..." : "Sign in"}</button>
         <div className="auth-security"><span aria-hidden="true" /> Your session is protected and access is role controlled.</div>
       </form>
@@ -124,12 +131,12 @@ function PasswordChange({ user, onChanged, onLogout }: { user: AuthUser; onChang
         <div className="account-context">Signed in as <strong>{user.email}</strong></div>
         {error && <div className="auth-error" role="alert">{error}</div>}
         <label htmlFor="current-password">Current password</label>
-        <input id="current-password" className="input" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
+        <PasswordInput id="current-password" className="input" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
         <label htmlFor="new-password">New password</label>
-        <input id="new-password" className="input" type="password" autoComplete="new-password" minLength={15} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+        <PasswordInput id="new-password" className="input" autoComplete="new-password" minLength={15} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} showStrength required />
         <div className="password-hint">Use at least 15 characters.</div>
         <label htmlFor="confirm-password">Confirm new password</label>
-        <input id="confirm-password" className="input" type="password" autoComplete="new-password" minLength={15} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required />
+        <PasswordInput id="confirm-password" className="input" autoComplete="new-password" minLength={15} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required />
         <div className="auth-actions">
           <button className="btn primary" disabled={busy}>{busy ? "Updating..." : "Update password"}</button>
           <button className="btn ghost" type="button" onClick={onLogout}>Sign out</button>
@@ -140,6 +147,16 @@ function PasswordChange({ user, onChanged, onLogout }: { user: AuthUser; onChang
 }
 
 export default function App() {
+  // Wraps everything, including the signed-out screens, so the login page
+  // honours the saved theme too.
+  return (
+    <ThemeProvider>
+      <Workspace />
+    </ThemeProvider>
+  );
+}
+
+function Workspace() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -161,18 +178,23 @@ export default function App() {
       <Shell user={user} onLogout={async () => { try { await auth.logout(); } finally { setUser(null); } }}>
         <Suspense fallback={<Spinner />}>
         <Routes>
-          <Route path="/" element={<Dashboard permissions={user.permissions} />} />
+          <Route path="/" element={<Dashboard user={user} />} />
           <Route path="/masters" element={permit("masters:read", <Masters />)} />
           <Route path="/styles" element={permit("styles:read", <Styles />)} />
           <Route path="/styles/:id" element={permit("styles:read", <StyleDetail />)} />
           <Route path="/sales" element={permit("sales:read", <Sales />)} />
           <Route path="/sales/:id" element={permit("sales:read", <SalesDetail />)} />
+          <Route path="/planning" element={permit("planning:read", <Planning />)} />
           <Route path="/procurement" element={permit("procurement:read", <Procurement />)} />
           <Route path="/inventory" element={permit("inventory:read", <Inventory />)} />
           <Route path="/production" element={permit("production:read", <Production />)} />
+          <Route path="/markers" element={permit("production:read", <Markers />)} />
+          <Route path="/shop-floor" element={permit("production:read", <ShopFloor />)} />
+          <Route path="/warehouse" element={permit("inventory:read", <Warehouse />)} />
           <Route path="/quality" element={permit("quality:read", <Quality />)} />
           <Route path="/costing" element={permit("costing:read", <Costing />)} />
           <Route path="/finance" element={permit("finance:read", <Finance />)} />
+          <Route path="/settings" element={<Settings user={user} />} />
           {user.permissions.includes("users:manage") && <Route path="/users" element={<Users />} />}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -33,6 +33,21 @@ class Settings(BaseSettings):
     # e.g. postgresql+psycopg://user:pass@host/garment_erp
     database_url: str = "sqlite:///./garment_erp.db"
     auto_create_schema: bool = True
+
+    # Connection pool, per worker process. Gunicorn runs WEB_CONCURRENCY
+    # processes and each builds its own engine, so the cluster's peak load on
+    # PostgreSQL is:
+    #
+    #     WEB_CONCURRENCY × (DB_POOL_SIZE + DB_MAX_OVERFLOW)
+    #
+    # That figure must stay comfortably below the server's max_connections,
+    # leaving room for pg_dump, psql and migrations. Exceeding it does not
+    # degrade gracefully — Postgres refuses new connections outright.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    # Recycle before typical managed-Postgres and proxy idle timeouts, which
+    # otherwise hand back a dead socket on the first query after a quiet spell.
+    db_pool_recycle_seconds: int = 1800
     enable_api_docs: bool = True
     max_request_body_bytes: int = 2 * 1024 * 1024
     # File attachments (larger than the JSON body cap; enforced on /attachments).

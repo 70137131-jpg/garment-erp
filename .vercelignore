@@ -1,0 +1,12 @@
+.git
+.github
+.claude
+.venv
+**/__pycache__
+**/*.pyc
+**/*.db
+backend/tests
+docs
+frontend/node_modules
+frontend/dist
+scripts

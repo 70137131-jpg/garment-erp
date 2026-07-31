@@ -12,7 +12,7 @@ const GENDERS = ["mens", "womens", "boys", "girls", "unisex"];
 
 export default function Styles() {
   const { can } = useAuthorization();
-  const { data, loading, reload } = useAsync(() => api.get<Style[]>("/styles"));
+  const { data, loading, reload } = useAsync(() => api.get<Style[]>("/styles"), [], "/styles");
   const [open, setOpen] = useState(false);
   return (
     <div>

@@ -170,9 +170,11 @@ def test_ts100_masters_to_pnl(finance_client, session):
     # ------------------------------------------------------------------ #
     # 9. FINANCE — AR invoice auto-raised, settle, final P&L
     # ------------------------------------------------------------------ #
-    # AP from goods receipt: 1000m * 4.00 = 4000.
+    # Goods receipt accrues GRNI; AP is recognised once the supplier invoice is matched.
     ap = account_by_code(session, "2000")
-    assert account_balance(session, ap) == Decimal("4000.00")
+    grni = account_by_code(session, "2100")
+    assert account_balance(session, ap) == Decimal("0.00")
+    assert account_balance(session, grni) == Decimal("4000.00")
 
     invoices = c.get("/finance/ar-invoices").json()
     assert len(invoices) == 1

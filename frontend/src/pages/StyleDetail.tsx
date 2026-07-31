@@ -14,7 +14,7 @@ export default function StyleDetail() {
   const sid = Number(id);
   const style = useAsync(() => api.get<Style>(`/styles/${sid}`), [sid]);
   const colours = useAsync(() => api.get<Colour[]>("/masters/colours"));
-  const materials = useAsync(() => api.get<Material[]>("/masters/materials"));
+  const materials = useAsync(() => api.get<Material[]>("/masters/materials"), [], "/masters/materials");
   const cways = useAsync(() => api.get<Colourway[]>(`/styles/${sid}/colourways`), [sid]);
   const boms = useAsync(() => api.get<BomVersion[]>(`/styles/${sid}/bom-versions`), [sid]);
   const ranges = useAsync(() => api.get<SizeRange[]>("/masters/size-ranges"));

@@ -1,10 +1,52 @@
 # Frontend Design — "Atelier Monochrome" Operations Workspace
 
 **Document:** 07 — Frontend Design
-**Status:** v2.0 (implemented) — supersedes v1.0 "Nightshift" (teal/amber)
+**Status:** v2.1 (implemented) — supersedes v2.0 single-theme monochrome
 **Replaces:** the "industrial atelier" light theme
 
+## v2.1 — Two directions, one identity
+
+Direction change on request: the workspace now ships **light and dark themes**,
+chosen from the account menu (Settings → Appearance), with a third option that
+follows the operating system.
+
+This reverses the v2.0 decision below, which committed to a dark-only theme on
+the grounds that "a timid dual theme dilutes the identity". The reversal is
+narrower than it sounds, and the identity survives intact, because the palette
+was already **fully achromatic**: the light theme is the same ladder inverted —
+black ink on white paper instead of white ink on black canvas — rather than a
+second palette with its own hues to keep in step.
+
+**How it is built:**
+
+- Two RGB triplets carry the inversion. `--tint` is the ink/signal colour
+  (white on dark, black on light) and `--anti` is its contrast partner, used
+  for text sitting on a full tint fill. Every wash, hover and hairline is
+  written `rgb(var(--tint) / <alpha>)`, so flipping the two triplets re-derives
+  the entire surface treatment.
+- Dark is the stylesheet default, under plain `:root`. Light is a single
+  `:root[data-theme="light"]` override block. There is no `[data-theme="dark"]`
+  block to drift out of sync.
+- Mid-greys in the light theme are pulled **darker** than a naive
+  `100 - L` inversion gives. Grey-on-white needs more contrast than the same
+  grey-on-black to stay legible at the 9–11px mono sizes used for labels.
+- Film grain drops from 3.5% to 2.2% on light, where the same noise reads
+  louder.
+- Toasts stay inverted against the canvas in both themes, so a notification
+  never reads as just another card.
+- An inline bootstrap in `index.html` applies the stored choice before first
+  paint, so the app never flashes the wrong canvas. It duplicates the
+  resolution logic in `src/theme/ThemeProvider.tsx` — the two must be kept in
+  step.
+
+The preference is stored per browser (`localStorage`, key `erp:theme`), not on
+the account: it describes a device and its lighting, not a person. A factory
+floor terminal and a back-office laptop want different answers.
+
 ## v2.0 — Atelier Monochrome
+
+Superseded by v2.1 above on the single-theme question; everything else here
+still stands.
 
 Direction change on request: **pure black, white ink, zero chroma.**
 
@@ -43,7 +85,7 @@ inventory, and responsive rules are unchanged in v2.0.
 | Next.js App Router + RSC + Server Actions | React 18 + Vite SPA against a FastAPI session-cookie API | Keep the SPA. RSC/Server Actions don't apply to a FastAPI backend; rewriting the framework buys zero user value. |
 | Tailwind + shadcn/ui components | A single semantic-class design system (`theme.css`) consumed by every page | Keep it. One stylesheet re-skins all 13 pages at once with no page-code churn — that IS our design-token layer. |
 | TanStack Table, React Hook Form, Zod, Recharts | Existing `ListTools` (search/sort/pagination/CSV), controlled forms, API-side validation | Keep existing machinery; this brief is visual, not architectural. |
-| Light + dark modes | The reference photo is dark; ERPs live on wall screens and night shifts | Commit fully to **dark-first single theme**. A timid dual theme dilutes the identity. |
+| Light + dark modes | The reference photo is dark; ERPs live on wall screens and night shifts | Commit fully to **dark-first single theme**. A timid dual theme dilutes the identity. *(Reversed in v2.1: both themes ship, derived from one achromatic ladder rather than two palettes.)* |
 | HSL tokens: Primary teal `185 72% 44%`, accent orange `35 92% 55%`, dark bg `222 38% 8%`, surface `222 34% 11%` | — | Adopted verbatim as the core palette. |
 
 ## 1. Aesthetic identity

@@ -62,7 +62,7 @@ function POs() {
 function POForm({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const suppliers = useAsync(() => api.get<Supplier[]>("/masters/suppliers"));
-  const materials = useAsync(() => api.get<Material[]>("/masters/materials"));
+  const materials = useAsync(() => api.get<Material[]>("/masters/materials"), [], "/masters/materials");
   const [supplierId, setSupplierId] = useState(0);
   const [requiresApproval, setRequiresApproval] = useState(false);
   const [lines, setLines] = useState<{ material_id: number; ordered_qty: string; unit_price: string }[]>([]);

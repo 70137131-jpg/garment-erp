@@ -8,3 +8,12 @@ frontend/dist
 backups
 docs
 *.md
+
+# Never bake secrets into an image layer. The Dockerfile copies backend/
+# wholesale, so without this a local .env — database password included — ends
+# up readable by anyone who can pull the image. Templates carry no credentials
+# and are allowed through.
+.env
+**/.env
+**/.env.*
+!**/.env.example

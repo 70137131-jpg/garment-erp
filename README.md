@@ -2,7 +2,7 @@
 
 A single source of truth for a garment manufacturing business — see
 [`docs/blueprint.md`](docs/blueprint.md) for the full functional blueprint and
-[`docs/build-plan.md`](docs/build-plan.md) for the phased build plan.
+[`docs/08-Improvement-Plan.md`](docs/08-Improvement-Plan.md) for the phased improvement plan.
 
 Stack: **FastAPI + SQLModel + Alembic** backend, **React + Vite + TypeScript**
 frontend (SQLite for local dev, Postgres in production). Money and quantities are
@@ -132,6 +132,80 @@ Internet-facing deployment (automatic HTTPS via Caddy — set `DOMAIN` in `.env`
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
+
+### Hosting
+
+The whole stack — database, API, SPA, TLS and backups — runs on **one small
+Linux server**, which is both the cheapest option and the least work, because
+the Compose files above already describe it end to end.
+
+Two properties of this application rule out the free tiers of most
+platform-as-a-service hosts:
+
+- **Attachments are written to disk** (the `attachments` volume). Hosts with an
+  ephemeral filesystem lose every upload on redeploy.
+- **Startup is not instant** — the entrypoint applies migrations before serving.
+  Free tiers that suspend an idle service make the first request after a quiet
+  period wait for the whole boot.
+
+A plain VPS with a persistent disk avoids both, and running PostgreSQL beside
+the API removes a network round trip from every query.
+
+**Sizing.** An internal ERP is low-traffic relative to its user count: of 1,000
+staff accounts, only a fraction are mid-request at any instant. The database
+outgrows the CPU long before the API does, so buy disk and RAM before cores.
+
+| Users | Server | Roughly |
+|-------|--------|---------|
+| ≤ 100 | 2 vCPU / 4 GB / 40 GB | €4/mo |
+| ~1,000 | 4 vCPU / 8 GB / 80 GB | €7/mo |
+| 1,000 with heavy attachments | 4 vCPU / 8 GB + volume | €7/mo + storage |
+
+Prices are indicative (Hetzner CX-class, mid-2026) and worth re-checking.
+
+**Deploying:**
+
+```bash
+git clone <your-repo> && cd garment-erp
+cp .env.example .env
+#   POSTGRES_PASSWORD          long random string
+#   DOMAIN                     hostname whose A record points at this machine
+#   BOOTSTRAP_ADMIN_EMAIL      first administrator
+#   BOOTSTRAP_ADMIN_PASSWORD   ≥ 15 characters; delete both after first login
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+curl -fsS https://$DOMAIN/api/ready       # {"status":"ready"}
+```
+
+Caddy obtains the certificate itself; nothing else needs configuring for HTTPS.
+The production override sets `ENVIRONMENT=production`, which makes startup
+*refuse* an unsafe configuration — SQLite, automatic schema creation, public API
+docs, insecure cookies, non-HTTPS origins, or a wildcard host — rather than
+launching quietly with it.
+
+**Capacity arithmetic.** Each gunicorn worker is a separate process holding its
+own connection pool, so the cluster's peak demand on PostgreSQL is:
+
+```
+WEB_CONCURRENCY × (DB_POOL_SIZE + DB_MAX_OVERFLOW)  ≪  POSTGRES_MAX_CONNECTIONS
+```
+
+Defaults give `4 × (5 + 10) = 60` against a ceiling of 200. Raising
+`WEB_CONCURRENCY` without raising the ceiling is the usual way to break this:
+PostgreSQL does not queue past `max_connections`, it refuses the connection. For
+a 4-core box serving ~1,000 users, `WEB_CONCURRENCY=8` with the default pool
+needs 120 connections — still inside 200, but set both deliberately.
+
+**Before you rely on it:**
+
+- **Move backups off the machine.** `./backups/` sits on the same disk as the
+  database it protects; if that disk fails you lose both. Sync it nightly to
+  object storage or another host.
+- **One server is one point of failure.** For 1,000 people whose work stops when
+  it does, the honest upgrade path is a managed PostgreSQL with
+  point-in-time recovery — more expensive, but it turns a lost disk from a
+  disaster into an inconvenience.
+- **Watch disk, not CPU.** Attachments and the stock ledger only grow. Alert on
+  free space.
 
 Operations:
 

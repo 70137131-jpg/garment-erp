@@ -60,7 +60,7 @@ export default function Sales() {
 function OrderForm({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const customers = useAsync(() => api.get<Customer[]>("/masters/customers"));
-  const styles = useAsync(() => api.get<Style[]>("/styles"));
+  const styles = useAsync(() => api.get<Style[]>("/styles"), [], "/styles");
   const colours = useAsync(() => api.get<Colour[]>("/masters/colours"));
   const ranges = useAsync(() => api.get<SizeRange[]>("/masters/size-ranges"));
 

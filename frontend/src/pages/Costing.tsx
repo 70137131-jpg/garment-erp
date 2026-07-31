@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, ApiError } from "../api/client";
-import { CostSheet, Style } from "../api/types";
+import { ActualCostRun, CostSheet, Style, VarianceType } from "../api/types";
 import { useAuthorization } from "../auth/Authorization";
 import { Card, Chip, Drawer, ErrorBox, Field, PageHeader, Spinner } from "../components/ui";
 import { useToast } from "../components/Toast";
@@ -12,7 +12,7 @@ const CATEGORIES = ["material", "trim", "sewing", "overhead", "other"];
 export default function Costing() {
   const { can } = useAuthorization();
   const editable = can("finance", "merchandiser");
-  const styles = useAsync(() => api.get<Style[]>("/styles"));
+  const styles = useAsync(() => api.get<Style[]>("/styles"), [], "/styles");
   const [styleId, setStyleId] = useState(0);
   const sheets = useAsync(
     () => (styleId ? api.get<CostSheet[]>(`/costing/styles/${styleId}/cost-sheets`) : Promise.resolve([] as CostSheet[])),
@@ -92,6 +92,8 @@ export default function Costing() {
 
       <Profitability />
 
+      <ActualCosting />
+
       {open && styleId ? <SheetForm styleId={styleId} onClose={() => setOpen(false)} onDone={() => { setOpen(false); sheets.reload(); }} /> : null}
     </div>
   );
@@ -126,6 +128,153 @@ function Profitability() {
               <div className="card stat"><div className="k">Margin</div><div className="v" style={{ fontSize: 22 }}>{pct(data.margin_pct)}</div></div>
             </div>
           )}
+        </div>
+      </Card>
+    </>
+  );
+}
+
+const VARIANCE_LABELS: Record<VarianceType, string> = {
+  material_price: "Material price",
+  material_usage: "Material usage",
+  labour_rate: "Labour rate",
+  labour_efficiency: "Labour efficiency",
+  overhead: "Overhead",
+  subcontract: "Subcontract",
+};
+
+function ActualCosting() {
+  const { can } = useAuthorization();
+  const canRun = can("finance", "merchandiser");
+  const canPost = can("finance");
+  const toast = useToast();
+  const [orderId, setOrderId] = useState("");
+  const [runs, setRuns] = useState<ActualCostRun[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [rate, setRate] = useState("");
+  const [overhead, setOverhead] = useState("");
+
+  async function load(id = Number(orderId)) {
+    setError(null);
+    try {
+      setRuns(await api.get<ActualCostRun[]>(`/costing/sales-orders/${id}/actual-cost`));
+    } catch (e) { setError((e as ApiError).message); setRuns(null); }
+  }
+
+  async function run() {
+    setBusy(true); setError(null);
+    try {
+      const body: Record<string, string> = {};
+      if (rate.trim()) body.actual_rate_per_min = rate.trim();
+      if (overhead.trim()) body.overhead_absorbed = overhead.trim();
+      await api.post(`/costing/sales-orders/${Number(orderId)}/actual-cost`, body);
+      toast.push("Actual cost run created");
+      await load();
+    } catch (e) { const m = (e as ApiError).message; setError(m); toast.push("Failed", { detail: m, bad: true }); }
+    finally { setBusy(false); }
+  }
+
+  async function post(id: number) {
+    try {
+      await api.post(`/costing/actual-cost/${id}/post`);
+      toast.push("Variances reclassified to the general ledger");
+      await load();
+    } catch (e) { toast.push("Failed", { detail: (e as ApiError).message, bad: true }); }
+  }
+
+  return (
+    <>
+      <div className="section-title">Actual cost &amp; variance</div>
+      <Card hint="Standard from the approved cost sheet; actuals from valued stock issues, sewing minutes and subcontract charges.">
+        <div className="card-pad">
+          <div className="flex" style={{ flexWrap: "wrap", marginBottom: 16 }}>
+            <input className="input mono" style={{ maxWidth: 180 }} value={orderId}
+              onChange={(e) => setOrderId(e.target.value)} placeholder="Sales order id" />
+            <button className="btn" disabled={!orderId} onClick={() => load()}>Load runs</button>
+            <input className="input mono" style={{ maxWidth: 170 }} value={rate}
+              onChange={(e) => setRate(e.target.value)} placeholder="Actual rate/min (opt)" />
+            <input className="input mono" style={{ maxWidth: 190 }} value={overhead}
+              onChange={(e) => setOverhead(e.target.value)} placeholder="Overhead absorbed (opt)" />
+            {canRun && <button className="btn primary" disabled={!orderId || busy} onClick={run}>
+              {busy ? "Running…" : "New run"}
+            </button>}
+            <a className="btn sm" href={`/api/costing/variances.csv${orderId ? `?sales_order_id=${Number(orderId)}` : ""}`}>Export CSV</a>
+          </div>
+
+          {error && <ErrorBox message={error} />}
+          {runs && !runs.length && <div className="empty">No runs yet for this order.</div>}
+
+          {runs?.map((r) => {
+            const adverse = parseFloat(r.total_variance) > 0;
+            return (
+              <div className="card" key={r.id} style={{ marginBottom: 14 }}>
+                <div className="flex-between" style={{ padding: "12px 16px", borderBottom: "1px solid var(--rule)" }}>
+                  <div>
+                    <strong className="mono">{r.run_number}</strong>{" "}
+                    <span className="muted">· {r.produced_qty} pcs · as of {r.as_of}</span>
+                  </div>
+                  <div className="inline-actions">
+                    <Chip status={r.status} />
+                    {canPost && r.status === "draft" &&
+                      <button className="btn sm" onClick={() => post(r.id)}>Post to GL</button>}
+                  </div>
+                </div>
+
+                <div className="grid cols-4" style={{ padding: 16 }}>
+                  <div className="card stat"><div className="k">Standard</div>
+                    <div className="v" style={{ fontSize: 20 }}>{money(r.std_total_cost, r.currency)}</div></div>
+                  <div className="card stat"><div className="k">Actual</div>
+                    <div className="v" style={{ fontSize: 20 }}>{money(r.actual_total_cost, r.currency)}</div></div>
+                  <div className={`card stat ${adverse ? "accent-madder" : "accent"}`}>
+                    <div className="k">{adverse ? "Adverse variance" : "Favourable variance"}</div>
+                    <div className="v" style={{ fontSize: 20 }}>{money(r.total_variance, r.currency)}</div></div>
+                  <div className="card stat"><div className="k">Unit std → actual</div>
+                    <div className="v" style={{ fontSize: 20 }}>
+                      {money(r.unit_std_cost, r.currency)} → {money(r.unit_actual_cost, r.currency)}
+                    </div></div>
+                </div>
+
+                <div className="table-wrap">
+                  <table className="tbl">
+                    <thead><tr>
+                      <th>Variance</th><th className="num">Standard</th><th className="num">Actual</th>
+                      <th className="num">Amount</th><th>Direction</th><th>Notes</th>
+                    </tr></thead>
+                    <tbody>
+                      {r.variances.map((v) => (
+                        <tr key={v.id}>
+                          <td>{VARIANCE_LABELS[v.variance_type]}</td>
+                          <td className="num">{money(v.standard_amount, r.currency)}</td>
+                          <td className="num">{money(v.actual_amount, r.currency)}</td>
+                          <td className="num" style={{ fontWeight: 600 }}>{money(v.amount, r.currency)}</td>
+                          <td>
+                            {parseFloat(v.amount) === 0
+                              ? <span className="muted">on standard</span>
+                              : <Chip tone={v.favourable ? "ok" : "bad"} label={v.favourable ? "favourable" : "adverse"} />}
+                          </td>
+                          <td className="muted">{v.explanation || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="grid cols-2" style={{ padding: 16, gap: 20 }}>
+                  <dl className="kv">
+                    <dt>Material qty (std → actual)</dt><dd className="mono">{r.std_material_qty} → {r.actual_material_qty}</dd>
+                    <dt>Minutes (std → actual)</dt><dd className="mono">{r.std_minutes} → {r.actual_minutes}</dd>
+                    <dt>Rate/min (std → actual)</dt><dd className="mono">{r.std_rate_per_min} → {r.actual_rate_per_min}</dd>
+                  </dl>
+                  <dl className="kv">
+                    <dt>Subcontract</dt><dd>{money(r.actual_subcontract_cost, r.currency)}</dd>
+                    <dt>Journal</dt><dd>{r.journal_entry_id ? `#${r.journal_entry_id}` : "—"}</dd>
+                    <dt>Posted by</dt><dd>{r.posted_by || "—"}</dd>
+                  </dl>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </Card>
     </>

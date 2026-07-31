@@ -11,7 +11,10 @@ from .costing import models as costing_models  # noqa: F401
 from .inventory import models as inventory_models  # noqa: F401
 from .kernel import idempotency as kernel_idempotency  # noqa: F401
 from .kernel import numbering as kernel_numbering  # noqa: F401
+from .marker import models as marker_models  # noqa: F401
 from .masters import models as masters_models  # noqa: F401
+from .mes import models as mes_models  # noqa: F401
+from .planning import models as planning_models  # noqa: F401
 from .procurement import models as procurement_models  # noqa: F401
 from .production import models as production_models  # noqa: F401
 from .quality import models as quality_models  # noqa: F401
@@ -19,4 +22,5 @@ from .sales import models as sales_models  # noqa: F401
 from .security import models as security_models  # noqa: F401
 from .styles import models as styles_models  # noqa: F401
 from .tna import models as tna_models  # noqa: F401
+from .wms import models as wms_models  # noqa: F401
 from .workforce import models as workforce_models  # noqa: F401
