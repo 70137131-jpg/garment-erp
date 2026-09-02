@@ -550,6 +550,9 @@ def query_rolls(
     status: Optional[RollStatus] = None,
     min_width_cm: Optional[Decimal] = None,
     lock: bool = False,
+    descending: bool = False,
+    offset: Optional[int] = None,
+    limit: Optional[int] = None,
 ) -> Sequence[Roll]:
     """Roll register query (4.3) — the basis of roll-selection logic (4.6)."""
     stmt = select(Roll)
@@ -565,7 +568,11 @@ def query_rolls(
         stmt = stmt.where(Roll.status == status)
     if min_width_cm is not None:
         stmt = stmt.where(Roll.width_cm >= min_width_cm)
-    stmt = stmt.order_by(Roll.id)
+    stmt = stmt.order_by(Roll.id.desc() if descending else Roll.id)
+    if offset is not None:
+        stmt = stmt.offset(offset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
     if lock:
         stmt = stmt.with_for_update()
     return session.exec(stmt).all()

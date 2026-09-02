@@ -72,3 +72,20 @@ def test_roll_register_queries(client, session):
 
     wide = query_rolls(session, material_id=mat, min_width_cm=Decimal("150"))
     assert {r.roll_number for r in wide} == {"R-1", "R-3"}
+
+
+def test_roll_register_paginates_in_descending_id_order(client, session):
+    mat = _make_fabric(client)
+    session.add_all(
+        [
+            Roll(roll_number=f"R-{number}", material_id=mat, width_cm=Decimal("150"),
+                 length=Decimal("50"), status=RollStatus.available)
+            for number in range(1, 5)
+        ]
+    )
+    session.commit()
+
+    page = client.get("/inventory/rolls", params={"offset": 1, "limit": 2})
+
+    assert page.status_code == 200, page.text
+    assert [roll["roll_number"] for roll in page.json()] == ["R-3", "R-2"]

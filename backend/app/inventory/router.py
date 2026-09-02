@@ -186,8 +186,11 @@ def list_rolls(
         grade=grade,
         status=status,
         min_width_cm=min_width_cm,
+        descending=True,
+        offset=offset,
+        limit=limit,
     )
-    return list(reversed(rows))[offset:offset + limit]
+    return rows
 
 
 @router.get("/rolls/export")
